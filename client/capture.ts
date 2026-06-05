@@ -70,8 +70,9 @@ function buildSelector(el: Element): string {
 function accessibleName(el: Element): string | null {
   const aria = el.getAttribute("aria-label");
   if (aria) return aria;
-  const text = (el.textContent ?? "").trim();
-  return text ? text.slice(0, 80) : null;
+  // Only short text reads as a "name"; long text is container noise (already in `text`).
+  const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+  return text && text.length <= 50 ? text : null;
 }
 
 export function buildElementPayload(el: Element): ElementPayload {

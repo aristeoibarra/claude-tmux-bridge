@@ -94,8 +94,8 @@ interface PickedItem {
       </div>
       <textarea placeholder="Describe the change you want…"></textarea>
       <div class="toggles">
-        <label><input type="checkbox" class="autosend" checked> auto-send</label>
-        <label><input type="checkbox" class="shot"> screenshot</label>
+        <label title="Send immediately. Uncheck to paste into Claude's prompt so you can review/edit before sending."><input type="checkbox" class="autosend" checked> auto-send</label>
+        <label title="Attach a PNG of the selected element so Claude can see how it renders."><input type="checkbox" class="shot"> 📷 screenshot</label>
       </div>
       <div class="row">
         <button class="cancel">Cancel</button>
@@ -177,7 +177,8 @@ interface PickedItem {
       panel.classList.remove("open");
       drawOverlay(null);
     }
-    if (e.altKey && (e.key === "c" || e.key === "C")) {
+    // e.code is layout/modifier independent — on macOS Alt+C yields "ç" in e.key.
+    if (e.altKey && e.code === "KeyC") {
       e.preventDefault();
       startSelect();
     }
@@ -250,7 +251,15 @@ interface PickedItem {
     setStatus("Sending…", "");
 
     let screenshot: string | null = null;
-    const shotTarget = focused ?? picked[0]?.element ?? null;
+    const area = (el: Element): number => {
+      const r = el.getBoundingClientRect();
+      return r.width * r.height;
+    };
+    const shotCandidates = [...picked.map((p) => p.element), ...(focused ? [focused] : [])];
+    const shotTarget = shotCandidates.reduce<Element | null>(
+      (best, el) => (best && area(best) >= area(el) ? best : el),
+      null,
+    );
     if (shot.checked && shotTarget) {
       try {
         screenshot = await domToPng(shotTarget, { scale: 1, backgroundColor: "#ffffff" });

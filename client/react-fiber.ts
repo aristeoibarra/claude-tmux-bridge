@@ -91,12 +91,20 @@ function getDisplayNameForFiber(fiber: Fiber): string | null {
   return getTypeName(fiber.elementType) ?? getTypeName(fiber.type);
 }
 
+/** Next.js / React App Router internal wrappers — noise, not user components. */
+const FRAMEWORK_RE =
+  /^(InnerLayoutRouter|OuterLayoutRouter|LayoutRouter|AppRouter|Router|RedirectErrorBoundary|RedirectBoundary|NotFoundBoundary|NotFoundErrorBoundary|HTTPAccessFallbackBoundary|LoadingBoundary|ErrorBoundary|SegmentViewNode|RenderFromTemplateContext|ScrollAndFocusHandler|TemplateContext|MetadataOutlet|OutletBoundary|ClientPageRoot|ClientSegmentRoot|ViewTransition|Suspense|Fragment)$/;
+
+function isFramework(name: string): boolean {
+  return FRAMEWORK_RE.test(name);
+}
+
 /** Nearest owning component name above a DOM node (e.g. "ProfileCard"). */
 export function getOwnerComponentName(node: Node): string | null {
   let fiber = getFiberFromDom(node);
   while (fiber) {
     const name = getDisplayNameForFiber(fiber);
-    if (name) return name;
+    if (name && !isFramework(name)) return name;
     fiber = fiber.return;
   }
   return null;
@@ -108,7 +116,7 @@ export function getComponentStack(node: Node, limit = 6): string[] {
   let fiber = getFiberFromDom(node);
   while (fiber && stack.length < limit) {
     const name = getDisplayNameForFiber(fiber);
-    if (name && stack[stack.length - 1] !== name) stack.push(name);
+    if (name && !isFramework(name) && stack[stack.length - 1] !== name) stack.push(name);
     fiber = fiber.return;
   }
   return stack;
