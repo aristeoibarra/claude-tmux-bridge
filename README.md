@@ -68,7 +68,18 @@ Then run it and grab the bookmarklet:
 claude-tmux-bridge start       # or: claude-tmux-bridge service install
 ```
 
-Open **http://localhost:7331** and **drag the bookmarklet** to your bookmarks bar.
+## Load the widget
+
+**Recommended — browser extension (zero-touch, automatic on every localhost):**
+
+1. Open `brave://extensions` (or `chrome://extensions`)
+2. Enable **Developer mode**
+3. **Load unpacked** → select the `extension/` folder of this repo
+4. Done. The toolbar now appears automatically on every `localhost` dev app — no
+   clicks, no code in your projects.
+
+**Alternative — bookmarklet:** open `http://localhost:7331` and drag the
+**◎ Select → Claude** button to your bookmarks bar; click it on any dev app.
 
 > Publishing is automated: pushing a `vX.Y.Z` tag triggers a GitHub Actions workflow
 > that builds and publishes to GitHub Packages.
