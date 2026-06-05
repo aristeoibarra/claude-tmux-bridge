@@ -1,16 +1,24 @@
 {
-  "name": "claude-tmux-bridge",
+  "name": "@aristeoibarra/claude-tmux-bridge",
   "version": "0.1.0",
-  "description": "Select a DOM element in your browser and send it, with a change request, straight into a Claude Code session running in a tmux pane.",
+  "description": "Select browser DOM elements and send them, with a change request, into a Claude Code session running in a tmux pane.",
   "type": "module",
   "bin": {
-    "claude-tmux-bridge": "./bin/cli.mjs"
+    "claude-tmux-bridge": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
-    "start": "tsx src/cli.ts start",
-    "panes": "tsx src/cli.ts panes",
-    "target": "tsx src/cli.ts target",
-    "typecheck": "tsc --noEmit"
+    "build": "rm -rf dist && tsup",
+    "dev": "tsx src/cli.ts start",
+    "typecheck": "tsc --noEmit",
+    "prepare": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aristeoibarra/claude-tmux-bridge.git"
   },
   "keywords": [
     "claude",
@@ -21,13 +29,14 @@
   ],
   "author": "aristeoibarra <aristeoibarra608@gmail.com>",
   "license": "MIT",
-  "dependencies": {
-    "@medv/finder": "^4.0.2",
-    "esbuild": "^0.25.0",
-    "modern-screenshot": "^4.7.0"
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "devDependencies": {
+    "@medv/finder": "^4.0.2",
     "@types/node": "^22.0.0",
+    "modern-screenshot": "^4.7.0",
+    "tsup": "^8.5.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   },

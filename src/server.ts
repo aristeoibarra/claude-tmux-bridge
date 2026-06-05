@@ -1,9 +1,9 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join, basename } from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import * as esbuild from "esbuild";
 
 import type { BridgeConfig } from "./config.ts";
 import { cwdForPort, detectClaudePanes, injectToPane } from "./tmux.ts";
@@ -11,7 +11,11 @@ import { formatPrompt, isSendPayload } from "./format.ts";
 import { bookmarkletPage } from "./bookmarklet.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const WIDGET_ENTRY = join(__dirname, "..", "client", "widget.ts");
+// Pre-built widget: bundled next to dist/cli.js, or under ../dist in dev (tsx).
+const WIDGET_CANDIDATES = [
+  join(__dirname, "widget.global.js"),
+  join(__dirname, "..", "dist", "widget.global.js"),
+];
 const MAX_BODY_BYTES = 5_000_000;
 
 interface Resolved {
@@ -22,17 +26,11 @@ interface Resolved {
 export function createServer(config: BridgeConfig) {
   let widgetCache: string | null = null;
 
-  async function buildWidget(): Promise<string> {
+  async function loadWidget(): Promise<string> {
     if (widgetCache) return widgetCache;
-    const result = await esbuild.build({
-      entryPoints: [WIDGET_ENTRY],
-      bundle: true,
-      format: "iife",
-      target: "es2020",
-      write: false,
-      define: { __BRIDGE_ORIGIN__: JSON.stringify(`http://localhost:${config.port}`) },
-    });
-    widgetCache = result.outputFiles[0]?.text ?? "";
+    const file = WIDGET_CANDIDATES.find((p) => existsSync(p));
+    if (!file) throw new Error("widget.global.js not found — run `npm run build`");
+    widgetCache = await readFile(file, "utf8");
     return widgetCache;
   }
 
@@ -63,7 +61,7 @@ export function createServer(config: BridgeConfig) {
     }
     if (req.method === "GET" && pathname === "/widget.js") {
       res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
-      res.end(await buildWidget());
+      res.end(await loadWidget());
       return;
     }
     if (req.method === "GET" && pathname === "/resolve") {

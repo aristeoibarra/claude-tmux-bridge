@@ -8,8 +8,6 @@ import { domToPng } from "modern-screenshot";
 
 import { buildElementPayload, type ElementPayload } from "./capture.ts";
 
-declare const __BRIDGE_ORIGIN__: string;
-
 interface PickedItem {
   element: Element;
   payload: ElementPayload;
@@ -18,6 +16,10 @@ interface PickedItem {
 (function initWidget(): void {
   const ROOT_ID = "claude-tmux-bridge-root";
   if (document.getElementById(ROOT_ID)) return;
+
+  // Origin of the bridge that served this script — works on any port, no build-time define.
+  const loader = document.currentScript as HTMLScriptElement | null;
+  const BRIDGE_ORIGIN = loader?.src ? new URL(loader.src).origin : "http://localhost:7331";
 
   const host = document.createElement("div");
   host.id = ROOT_ID;
@@ -150,7 +152,7 @@ interface PickedItem {
     dest.textContent = "resolving…";
     dest.className = "dest";
     try {
-      const r = await fetch(`${__BRIDGE_ORIGIN__}/resolve?url=${encodeURIComponent(location.href)}`);
+      const r = await fetch(`${BRIDGE_ORIGIN}/resolve?url=${encodeURIComponent(location.href)}`);
       const d = (await r.json()) as { ok: boolean; project?: string };
       dest.textContent = d.ok ? `→ ${d.project}` : "→ no Claude pane for this project";
       dest.className = d.ok ? "dest ok" : "dest err";
@@ -311,7 +313,7 @@ interface PickedItem {
     }
 
     try {
-      const res = await fetch(`${__BRIDGE_ORIGIN__}/send`, {
+      const res = await fetch(`${BRIDGE_ORIGIN}/send`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -336,7 +338,7 @@ interface PickedItem {
         setStatus(data.error ?? "Failed.", "err");
       }
     } catch {
-      setStatus(`Bridge not reachable at ${__BRIDGE_ORIGIN__}.`, "err");
+      setStatus(`Bridge not reachable at ${BRIDGE_ORIGIN}.`, "err");
     } finally {
       sendBtn.disabled = false;
     }

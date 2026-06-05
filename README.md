@@ -33,17 +33,45 @@ project → the only Claude pane. It never hard-fails on a stale pane id.
 - Node 20+
 - `lsof` (preinstalled on macOS)
 
-## Setup (once)
+## Install
 
-```bash
-git clone <repo> ~/claude-tmux-bridge && cd ~/claude-tmux-bridge
-npm install
-npm link                       # makes `claude-tmux-bridge` global
+Pick one:
 
-claude-tmux-bridge start       # run it (or: claude-tmux-bridge service install)
+**A. GitHub Packages (versioned).** GitHub Packages needs auth even for public packages,
+so add a one-time `~/.npmrc` with a token that has `read:packages`:
+
+```
+@aristeoibarra:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
 ```
 
-Then open **http://localhost:7331** and **drag the bookmarklet** to your bookmarks bar.
+```bash
+npm i -g @aristeoibarra/claude-tmux-bridge
+```
+
+**B. Straight from GitHub (no token).** Public repo, builds on install:
+
+```bash
+npm i -g github:aristeoibarra/claude-tmux-bridge
+```
+
+**C. Clone for development:**
+
+```bash
+git clone https://github.com/aristeoibarra/claude-tmux-bridge ~/claude-tmux-bridge
+cd ~/claude-tmux-bridge && npm install && npm link
+```
+
+Then run it and grab the bookmarklet:
+
+```bash
+claude-tmux-bridge start       # or: claude-tmux-bridge service install
+```
+
+Open **http://localhost:7331** and **drag the bookmarklet** to your bookmarks bar.
+
+> Publishing is automated: pushing a `vX.Y.Z` tag triggers a GitHub Actions workflow
+> that builds and publishes to GitHub Packages.
 
 ### Keep it always running (optional)
 
