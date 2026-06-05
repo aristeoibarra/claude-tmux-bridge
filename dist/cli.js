@@ -28,6 +28,7 @@ async function isTmuxAvailable() {
     return false;
   }
 }
+var FIELD_SEP = "@@CTB@@";
 async function listPanes() {
   const format = [
     "#{pane_id}",
@@ -35,10 +36,10 @@ async function listPanes() {
     "#{pane_current_path}",
     "#{pane_title}",
     "#{pane_active}"
-  ].join("	");
+  ].join(FIELD_SEP);
   const { stdout } = await execFileAsync("tmux", ["list-panes", "-a", "-F", format]);
   return stdout.split("\n").filter((line) => line.trim().length > 0).map((line) => {
-    const [id, command, path, title, active] = line.split("	");
+    const [id, command, path, title, active] = line.split(FIELD_SEP);
     return {
       id: id ?? "",
       command: command ?? "",
@@ -235,6 +236,16 @@ function createServer(config) {
       res.end(await loadWidget());
       return;
     }
+    if (req.method === "GET" && pathname === "/debug") {
+      try {
+        const panes2 = await listPanes();
+        const claude = await detectClaudePanes();
+        sendJson(res, 200, { ok: true, cwd: process.cwd(), panes: panes2, claude });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, error: errorMessage(error) });
+      }
+      return;
+    }
     if (req.method === "GET" && pathname === "/resolve") {
       const resolved = await resolveTarget(config, searchParams.get("url") ?? "");
       sendJson(res, 200, resolved ? { ok: true, project: basename(resolved.project), pane: resolved.pane } : { ok: false });
@@ -387,25 +398,29 @@ function plistContent() {
 </plist>
 `;
 }
+function domain() {
+  return `gui/${process.getuid?.() ?? ""}`;
+}
 async function installService() {
   await mkdir2(dirname2(PLIST), { recursive: true });
   await mkdir2(LOG_DIR, { recursive: true });
   await writeFile2(PLIST, plistContent(), "utf8");
-  await execFileAsync2("launchctl", ["unload", PLIST]).catch(() => {
+  await execFileAsync2("launchctl", ["bootout", `${domain()}/${LABEL}`]).catch(() => {
   });
-  await execFileAsync2("launchctl", ["load", "-w", PLIST]);
+  await execFileAsync2("launchctl", ["bootstrap", domain(), PLIST]);
   return PLIST;
 }
 async function uninstallService() {
-  await execFileAsync2("launchctl", ["unload", PLIST]).catch(() => {
+  await execFileAsync2("launchctl", ["bootout", `${domain()}/${LABEL}`]).catch(() => {
   });
   await rm(PLIST, { force: true });
 }
 async function serviceStatus() {
   try {
-    const { stdout } = await execFileAsync2("launchctl", ["list", LABEL]);
-    return `loaded
-${stdout.trim()}`;
+    const { stdout } = await execFileAsync2("launchctl", ["print", `${domain()}/${LABEL}`]);
+    const state = stdout.match(/state = (\w+)/)?.[1] ?? "?";
+    const pid = stdout.match(/pid = (\d+)/)?.[1] ?? "n/a";
+    return `state: ${state}, pid: ${pid}`;
   } catch {
     return "not loaded";
   }

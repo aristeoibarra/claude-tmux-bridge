@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import type { BridgeConfig } from "./config.ts";
-import { cwdForPort, detectClaudePanes, injectToPane } from "./tmux.ts";
+import { cwdForPort, detectClaudePanes, injectToPane, listPanes } from "./tmux.ts";
 import { formatPrompt, isSendPayload } from "./format.ts";
 import { bookmarkletPage } from "./bookmarklet.ts";
 
@@ -62,6 +62,16 @@ export function createServer(config: BridgeConfig) {
     if (req.method === "GET" && pathname === "/widget.js") {
       res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
       res.end(await loadWidget());
+      return;
+    }
+    if (req.method === "GET" && pathname === "/debug") {
+      try {
+        const panes = await listPanes();
+        const claude = await detectClaudePanes();
+        sendJson(res, 200, { ok: true, cwd: process.cwd(), panes, claude });
+      } catch (error) {
+        sendJson(res, 200, { ok: false, error: errorMessage(error) });
+      }
       return;
     }
     if (req.method === "GET" && pathname === "/resolve") {

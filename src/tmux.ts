@@ -33,6 +33,10 @@ export async function isTmuxAvailable(): Promise<boolean> {
   }
 }
 
+// tmux sanitizes control chars (e.g. TAB) in -F output when run without a tty
+// (as under launchd), so use a printable, improbable field separator instead.
+const FIELD_SEP = "@@CTB@@";
+
 export async function listPanes(): Promise<TmuxPane[]> {
   const format = [
     "#{pane_id}",
@@ -40,13 +44,13 @@ export async function listPanes(): Promise<TmuxPane[]> {
     "#{pane_current_path}",
     "#{pane_title}",
     "#{pane_active}",
-  ].join("\t");
+  ].join(FIELD_SEP);
   const { stdout } = await execFileAsync("tmux", ["list-panes", "-a", "-F", format]);
   return stdout
     .split("\n")
     .filter((line) => line.trim().length > 0)
     .map((line) => {
-      const [id, command, path, title, active] = line.split("\t");
+      const [id, command, path, title, active] = line.split(FIELD_SEP);
       return {
         id: id ?? "",
         command: command ?? "",

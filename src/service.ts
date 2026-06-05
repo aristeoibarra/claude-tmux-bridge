@@ -41,24 +41,30 @@ function plistContent(): string {
 `;
 }
 
+function domain(): string {
+  return `gui/${process.getuid?.() ?? ""}`;
+}
+
 export async function installService(): Promise<string> {
   await mkdir(dirname(PLIST), { recursive: true });
   await mkdir(LOG_DIR, { recursive: true });
   await writeFile(PLIST, plistContent(), "utf8");
-  await execFileAsync("launchctl", ["unload", PLIST]).catch(() => {});
-  await execFileAsync("launchctl", ["load", "-w", PLIST]);
+  await execFileAsync("launchctl", ["bootout", `${domain()}/${LABEL}`]).catch(() => {});
+  await execFileAsync("launchctl", ["bootstrap", domain(), PLIST]);
   return PLIST;
 }
 
 export async function uninstallService(): Promise<void> {
-  await execFileAsync("launchctl", ["unload", PLIST]).catch(() => {});
+  await execFileAsync("launchctl", ["bootout", `${domain()}/${LABEL}`]).catch(() => {});
   await rm(PLIST, { force: true });
 }
 
 export async function serviceStatus(): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("launchctl", ["list", LABEL]);
-    return `loaded\n${stdout.trim()}`;
+    const { stdout } = await execFileAsync("launchctl", ["print", `${domain()}/${LABEL}`]);
+    const state = stdout.match(/state = (\w+)/)?.[1] ?? "?";
+    const pid = stdout.match(/pid = (\d+)/)?.[1] ?? "n/a";
+    return `state: ${state}, pid: ${pid}`;
   } catch {
     return "not loaded";
   }
