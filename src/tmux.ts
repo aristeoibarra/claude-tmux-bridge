@@ -66,17 +66,18 @@ export async function detectClaudePanes(): Promise<TmuxPane[]> {
 }
 
 /**
- * Inject text into a pane as a bracketed paste, then press Enter to submit.
+ * Inject text into a pane as a bracketed paste. With `submit`, also press Enter
+ * to send it; otherwise the text is left in the prompt for the user to review.
  * Bracketed paste keeps multi-line content as a single block instead of
  * submitting on every newline — exactly how Claude Code expects a paste.
  */
-export async function injectToPane(pane: string, text: string): Promise<void> {
+export async function injectToPane(pane: string, text: string, submit: boolean): Promise<void> {
   const bufferName = "claude-tmux-bridge";
 
   await loadBuffer(bufferName, text);
   // -p: bracketed paste, -d: delete buffer afterwards.
   await execFileAsync("tmux", ["paste-buffer", "-b", bufferName, "-t", pane, "-d", "-p"]);
-  await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
+  if (submit) await execFileAsync("tmux", ["send-keys", "-t", pane, "Enter"]);
 }
 
 function loadBuffer(name: string, text: string): Promise<void> {

@@ -22,7 +22,9 @@
   "author": "aristeoibarra <aristeoibarra608@gmail.com>",
   "license": "MIT",
   "dependencies": {
-    "esbuild": "^0.25.0"
+    "@medv/finder": "^4.0.2",
+    "esbuild": "^0.25.0",
+    "modern-screenshot": "^4.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

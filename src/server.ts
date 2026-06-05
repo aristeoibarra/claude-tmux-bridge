@@ -1,6 +1,8 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import * as esbuild from "esbuild";
 
 import type { BridgeConfig } from "./config.ts";
@@ -93,16 +95,36 @@ export function createServer(config: BridgeConfig) {
       return;
     }
 
-    const prompt = formatPrompt(parsed);
-    await injectToPane(target, prompt);
-    sendJson(res, 200, { ok: true, targetPane: target });
+    const screenshotPath = parsed.screenshot ? await saveScreenshot(parsed.screenshot) : null;
+    const prompt = formatPrompt(parsed, screenshotPath);
+    await injectToPane(target, prompt, parsed.autoSubmit !== false);
+    sendJson(res, 200, { ok: true, targetPane: target, screenshot: screenshotPath });
   }
 }
 
 async function resolveTarget(config: BridgeConfig): Promise<string | null> {
   if (config.targetPane) return config.targetPane;
   const claudePanes = await detectClaudePanes();
-  return claudePanes.length === 1 ? (claudePanes[0]?.id ?? null) : null;
+  if (claudePanes.length === 1) return claudePanes[0]?.id ?? null;
+
+  // Multiple Claude panes: match the one whose cwd belongs to this project.
+  const project = config.projectPath ?? process.cwd();
+  const matched = claudePanes.filter((p) => pathMatches(project, p.path));
+  return matched.length === 1 ? (matched[0]?.id ?? null) : null;
+}
+
+function pathMatches(project: string, pane: string): boolean {
+  return pane === project || pane.startsWith(`${project}/`) || project.startsWith(`${pane}/`);
+}
+
+async function saveScreenshot(dataUrl: string): Promise<string | null> {
+  const match = /^data:image\/(?:png|jpeg);base64,(.+)$/s.exec(dataUrl);
+  if (!match?.[1]) return null;
+  const dir = join(tmpdir(), "claude-tmux-bridge");
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `shot-${Date.now()}.png`);
+  await writeFile(file, Buffer.from(match[1], "base64"));
+  return file;
 }
 
 function setCors(res: ServerResponse): void {

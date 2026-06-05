@@ -40,16 +40,19 @@ async function start(args: string[]): Promise<void> {
   const config = await loadConfig();
   const portArg = readFlag(args, "--port");
   if (portArg) config.port = Number.parseInt(portArg, 10);
+  const projectArg = readFlag(args, "--project");
+  if (projectArg) config.projectPath = projectArg;
 
   const server = createServer(config);
   server.listen(config.port, () => {
     log(`bridge listening on http://localhost:${config.port}`);
     log(`widget:  http://localhost:${config.port}/widget.js`);
     if (config.targetPane) {
-      log(`target:  pane ${config.targetPane} (from config)`);
+      log(`target:  pane ${config.targetPane} (pinned)`);
     } else {
-      log("target:  auto-detect Claude pane at send time");
-      log("         tip: run `claude-tmux-bridge target` inside your Claude Code pane to pin it.");
+      const project = config.projectPath ?? process.cwd();
+      log(`target:  auto-detect Claude pane by project path (${project})`);
+      log("         tip: pin one with `claude-tmux-bridge target` if detection is ambiguous.");
     }
   });
 }
@@ -74,8 +77,15 @@ async function panes(): Promise<void> {
 
 async function target(args: string[]): Promise<void> {
   const config = await loadConfig();
-  const explicit = args.find((a) => a.startsWith("%"));
 
+  if (args.includes("--clear")) {
+    config.targetPane = null;
+    await saveConfig(config);
+    log("target pane cleared — bridge will auto-detect by project path.");
+    return;
+  }
+
+  const explicit = args.find((a) => a.startsWith("%"));
   const pane = explicit ?? currentPane();
   if (!pane) {
     fail(
@@ -100,14 +110,19 @@ function printHelp(): void {
       "claude-tmux-bridge — send selected browser elements into a Claude Code tmux pane",
       "",
       "Usage:",
-      "  claude-tmux-bridge start [--port N]   Start the bridge server (default :" + DEFAULT_PORT + ")",
-      "  claude-tmux-bridge target [%id]       Pin the target pane (defaults to the current pane)",
-      "  claude-tmux-bridge panes              List tmux panes and guess which run Claude Code",
+      "  claude-tmux-bridge start [--port N] [--project PATH]",
+      "      Start the bridge server (default :" + DEFAULT_PORT + ")",
+      "  claude-tmux-bridge target [%id|--clear]",
+      "      Pin the target pane (defaults to the current pane), or clear it",
+      "  claude-tmux-bridge panes",
+      "      List tmux panes and guess which run Claude Code",
       "",
-      "Typical setup:",
+      "Typical setup (single project):",
       "  1. In your Claude Code pane:  npx claude-tmux-bridge target",
       "  2. In a second pane:          npx claude-tmux-bridge start",
-      "  3. Load the widget in your dev app (see README).",
+      "",
+      "Multiple Claude sessions: skip the pin and run `start` from each project dir —",
+      "the bridge routes by the pane's working directory.",
     ].join("\n"),
   );
 }

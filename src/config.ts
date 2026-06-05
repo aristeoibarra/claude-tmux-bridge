@@ -5,6 +5,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 export interface BridgeConfig {
   /** tmux target pane id, e.g. "%7". When null, the server resolves it at send time. */
   targetPane: string | null;
+  /** Project path used to match the right Claude pane when no pane is pinned. */
+  projectPath: string | null;
   /** HTTP port the bridge listens on. */
   port: number;
 }
@@ -16,6 +18,7 @@ const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
 const DEFAULT_CONFIG: BridgeConfig = {
   targetPane: null,
+  projectPath: null,
   port: DEFAULT_PORT,
 };
 
