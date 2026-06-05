@@ -35,17 +35,21 @@ async function listPanes() {
     "#{pane_current_command}",
     "#{pane_current_path}",
     "#{pane_title}",
-    "#{pane_active}"
+    "#{pane_active}",
+    "#{session_name}",
+    "#{window_index}"
   ].join(FIELD_SEP);
   const { stdout } = await execFileAsync("tmux", ["list-panes", "-a", "-F", format]);
   return stdout.split("\n").filter((line) => line.trim().length > 0).map((line) => {
-    const [id, command, path, title, active] = line.split(FIELD_SEP);
+    const [id, command, path, title, active, session, window] = line.split(FIELD_SEP);
     return {
       id: id ?? "",
       command: command ?? "",
       path: path ?? "",
       title: title ?? "",
-      active: active === "1"
+      active: active === "1",
+      session: session ?? "",
+      window: window ?? ""
     };
   });
 }
@@ -253,6 +257,16 @@ function createServer(config) {
       sendJson(res, 200, resolved ? { ok: true, project: basename(resolved.project), pane: resolved.pane } : { ok: false });
       return;
     }
+    if (req.method === "GET" && pathname === "/sessions") {
+      try {
+        const claude = await detectClaudePanes();
+        const sessions = claude.map((p) => ({ id: p.id, label: sessionLabel(p), path: p.path }));
+        sendJson(res, 200, { ok: true, sessions });
+      } catch {
+        sendJson(res, 200, { ok: true, sessions: [] });
+      }
+      return;
+    }
     if (req.method === "POST" && pathname === "/send") {
       await handleSend(req, res);
       return;
@@ -272,7 +286,8 @@ function createServer(config) {
       sendJson(res, 400, { ok: false, error: "missing message/url/elements" });
       return;
     }
-    const resolved = await resolveTarget(config, parsed.url);
+    const override = typeof parsed.targetPane === "string" ? parsed.targetPane : null;
+    const resolved = await resolveTarget(config, parsed.url, override);
     if (!resolved) {
       sendJson(res, 409, {
         ok: false,
@@ -291,9 +306,13 @@ function createServer(config) {
     });
   }
 }
-async function resolveTarget(config, requestUrl) {
+async function resolveTarget(config, requestUrl, override) {
   const claude = await detectClaudePanes();
   if (claude.length === 0) return null;
+  if (override) {
+    const chosen = claude.find((p) => p.id === override);
+    if (chosen) return { pane: chosen.id, project: chosen.path };
+  }
   if (config.targetPane) {
     const pinned = claude.find((p) => p.id === config.targetPane);
     if (pinned) return { pane: pinned.id, project: pinned.path };
@@ -308,6 +327,11 @@ async function resolveTarget(config, requestUrl) {
   if (byConfig) return { pane: byConfig.id, project: byConfig.path };
   if (claude.length === 1 && claude[0]) return { pane: claude[0].id, project: claude[0].path };
   return null;
+}
+function sessionLabel(pane) {
+  const project = basename(pane.path) || pane.path;
+  const where = pane.session ? `${pane.session}:${pane.window}` : pane.id;
+  return `${where} \xB7 ${project}`;
 }
 function pathMatches(project, pane) {
   return pane === project || pane.startsWith(`${project}/`) || project.startsWith(`${pane}/`);

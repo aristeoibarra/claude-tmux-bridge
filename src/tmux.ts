@@ -10,6 +10,8 @@ export interface TmuxPane {
   path: string;
   title: string;
   active: boolean;
+  session: string;
+  window: string;
 }
 
 /** Claude Code renames its pane process to its semver version, e.g. "2.1.165". */
@@ -44,19 +46,23 @@ export async function listPanes(): Promise<TmuxPane[]> {
     "#{pane_current_path}",
     "#{pane_title}",
     "#{pane_active}",
+    "#{session_name}",
+    "#{window_index}",
   ].join(FIELD_SEP);
   const { stdout } = await execFileAsync("tmux", ["list-panes", "-a", "-F", format]);
   return stdout
     .split("\n")
     .filter((line) => line.trim().length > 0)
     .map((line) => {
-      const [id, command, path, title, active] = line.split(FIELD_SEP);
+      const [id, command, path, title, active, session, window] = line.split(FIELD_SEP);
       return {
         id: id ?? "",
         command: command ?? "",
         path: path ?? "",
         title: title ?? "",
         active: active === "1",
+        session: session ?? "",
+        window: window ?? "",
       } satisfies TmuxPane;
     });
 }

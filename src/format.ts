@@ -19,6 +19,8 @@ export interface SendPayload {
   elements: ElementPayload[];
   screenshot: string | null;
   autoSubmit: boolean;
+  /** Per-tab override: pane id picked in the widget's Settings. null/absent = auto-route. */
+  targetPane?: string | null;
 }
 
 export function isSendPayload(value: unknown): value is SendPayload {

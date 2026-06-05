@@ -81,6 +81,17 @@ export function createServer(config: BridgeConfig) {
       sendJson(res, 200, resolved ? { ok: true, project: basename(resolved.project), pane: resolved.pane } : { ok: false });
       return;
     }
+    if (req.method === "GET" && pathname === "/sessions") {
+      try {
+        const claude = await detectClaudePanes();
+        const sessions = claude.map((p) => ({ id: p.id, label: sessionLabel(p), path: p.path }));
+        sendJson(res, 200, { ok: true, sessions });
+      } catch {
+        // tmux server not running yet — degrade to an empty list so the widget shows "Auto".
+        sendJson(res, 200, { ok: true, sessions: [] });
+      }
+      return;
+    }
     if (req.method === "POST" && pathname === "/send") {
       await handleSend(req, res);
       return;
@@ -102,7 +113,8 @@ export function createServer(config: BridgeConfig) {
       return;
     }
 
-    const resolved = await resolveTarget(config, parsed.url);
+    const override = typeof parsed.targetPane === "string" ? parsed.targetPane : null;
+    const resolved = await resolveTarget(config, parsed.url, override);
     if (!resolved) {
       sendJson(res, 409, {
         ok: false,
@@ -125,9 +137,20 @@ export function createServer(config: BridgeConfig) {
 }
 
 /** Resolve the destination pane in cascade, tolerant of ephemeral pane ids. */
-async function resolveTarget(config: BridgeConfig, requestUrl: string): Promise<Resolved | null> {
+async function resolveTarget(
+  config: BridgeConfig,
+  requestUrl: string,
+  override?: string | null,
+): Promise<Resolved | null> {
   const claude = await detectClaudePanes();
   if (claude.length === 0) return null;
+
+  // 0. Per-tab override picked in the widget — only if that pane still exists.
+  // Falls through to auto-routing when the chosen pane is gone (ephemeral id died).
+  if (override) {
+    const chosen = claude.find((p) => p.id === override);
+    if (chosen) return { pane: chosen.id, project: chosen.path };
+  }
 
   // 1. Explicit pin — only if the pinned pane still exists.
   if (config.targetPane) {
@@ -153,6 +176,13 @@ async function resolveTarget(config: BridgeConfig, requestUrl: string): Promise<
   if (claude.length === 1 && claude[0]) return { pane: claude[0].id, project: claude[0].path };
 
   return null;
+}
+
+/** Human-recognizable label for the Settings session picker: "demo:1 · project". */
+function sessionLabel(pane: TmuxPane): string {
+  const project = basename(pane.path) || pane.path;
+  const where = pane.session ? `${pane.session}:${pane.window}` : pane.id;
+  return `${where} · ${project}`;
 }
 
 function pathMatches(project: string, pane: string): boolean {
