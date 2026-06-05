@@ -13,8 +13,7 @@
   "scripts": {
     "build": "rm -rf dist && tsup",
     "dev": "tsx src/cli.ts start",
-    "typecheck": "tsc --noEmit",
-    "prepare": "npm run build"
+    "typecheck": "tsc --noEmit"
   },
   "repository": {
     "type": "git",
