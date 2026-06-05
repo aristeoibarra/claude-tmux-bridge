@@ -91,9 +91,23 @@ function getDisplayNameForFiber(fiber: Fiber): string | null {
   return getTypeName(fiber.elementType) ?? getTypeName(fiber.type);
 }
 
-/** Next.js / React App Router internal wrappers — noise, not user components. */
-const FRAMEWORK_RE =
-  /^(InnerLayoutRouter|OuterLayoutRouter|LayoutRouter|AppRouter|Router|RedirectErrorBoundary|RedirectBoundary|NotFoundBoundary|NotFoundErrorBoundary|HTTPAccessFallbackBoundary|LoadingBoundary|ErrorBoundary|SegmentViewNode|RenderFromTemplateContext|ScrollAndFocusHandler|TemplateContext|MetadataOutlet|OutletBoundary|ClientPageRoot|ClientSegmentRoot|ViewTransition|Suspense|Fragment)$/;
+/**
+ * Next.js / React App Router internal wrappers — noise, not user components.
+ * Pattern-based (not an exact list) because Next renames these across versions.
+ */
+const FRAMEWORK_RE = new RegExp(
+  [
+    "(?:Boundary|Handler|Outlet|Router)$", // common framework/HOC suffixes
+    "Scroll(?:AndMaybe|And)?Focus", // scroll/focus handlers
+    "RenderFromTemplate",
+    "HTTPAccessFallback",
+    "Fallback",
+    "Redirect",
+    "NotFound",
+    // exact internal names without the suffixes above
+    "^(?:Suspense|Fragment|ViewTransition|SegmentViewNode|TemplateContext|MetadataOutlet|RouteAnnouncer|ClientPageRoot|ClientSegmentRoot|AppRouter|LayoutRouter|InnerLayoutRouter|OuterLayoutRouter)$",
+  ].join("|"),
+);
 
 function isFramework(name: string): boolean {
   return FRAMEWORK_RE.test(name);
