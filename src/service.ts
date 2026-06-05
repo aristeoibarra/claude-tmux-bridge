@@ -12,7 +12,8 @@ const PLIST = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
 const LOG_DIR = join(homedir(), "Library", "Logs", "claude-tmux-bridge");
 
 function binPath(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "cli.mjs");
+  // service.ts is bundled into dist/cli.js, so __dirname is dist/ at runtime.
+  return join(dirname(fileURLToPath(import.meta.url)), "cli.js");
 }
 
 function plistContent(): string {

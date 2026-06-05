@@ -362,7 +362,7 @@ var LABEL = "com.aristeoibarra.claude-tmux-bridge";
 var PLIST = join2(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
 var LOG_DIR = join2(homedir(), "Library", "Logs", "claude-tmux-bridge");
 function binPath() {
-  return join2(dirname2(fileURLToPath2(import.meta.url)), "..", "bin", "cli.mjs");
+  return join2(dirname2(fileURLToPath2(import.meta.url)), "cli.js");
 }
 function plistContent() {
   const path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
