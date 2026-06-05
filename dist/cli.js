@@ -240,7 +240,9 @@ function createServer(config) {
       try {
         const panes2 = await listPanes();
         const claude = await detectClaudePanes();
-        sendJson(res, 200, { ok: true, cwd: process.cwd(), panes: panes2, claude });
+        const port = searchParams.get("port");
+        const portCwd = port ? await cwdForPort(port) : null;
+        sendJson(res, 200, { ok: true, cwd: process.cwd(), portCwd, panes: panes2, claude });
       } catch (error) {
         sendJson(res, 200, { ok: false, error: errorMessage(error) });
       }
@@ -299,21 +301,21 @@ async function resolveTarget(config, requestUrl) {
   const port = safePort(requestUrl);
   if (port) {
     const cwd = await cwdForPort(port);
-    if (cwd) {
-      const matched = claude.filter((p) => pathMatches(cwd, p.path));
-      if (matched.length === 1 && matched[0]) return { pane: matched[0].id, project: matched[0].path };
-    }
+    const best = bestMatch(cwd, claude);
+    if (best) return { pane: best.id, project: best.path };
   }
-  const projectPath = config.projectPath;
-  if (projectPath) {
-    const matched = claude.filter((p) => pathMatches(projectPath, p.path));
-    if (matched.length === 1 && matched[0]) return { pane: matched[0].id, project: matched[0].path };
-  }
+  const byConfig = bestMatch(config.projectPath, claude);
+  if (byConfig) return { pane: byConfig.id, project: byConfig.path };
   if (claude.length === 1 && claude[0]) return { pane: claude[0].id, project: claude[0].path };
   return null;
 }
 function pathMatches(project, pane) {
   return pane === project || pane.startsWith(`${project}/`) || project.startsWith(`${pane}/`);
+}
+function bestMatch(project, panes2) {
+  if (!project) return null;
+  const matched = panes2.filter((p) => pathMatches(project, p.path)).sort((a, b) => b.path.length - a.path.length);
+  return matched[0] ?? null;
 }
 function safePort(raw) {
   try {

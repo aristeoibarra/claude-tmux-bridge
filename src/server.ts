@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import type { BridgeConfig } from "./config.ts";
-import { cwdForPort, detectClaudePanes, injectToPane, listPanes } from "./tmux.ts";
+import { cwdForPort, detectClaudePanes, injectToPane, listPanes, type TmuxPane } from "./tmux.ts";
 import { formatPrompt, isSendPayload } from "./format.ts";
 import { bookmarkletPage } from "./bookmarklet.ts";
 
@@ -68,7 +68,9 @@ export function createServer(config: BridgeConfig) {
       try {
         const panes = await listPanes();
         const claude = await detectClaudePanes();
-        sendJson(res, 200, { ok: true, cwd: process.cwd(), panes, claude });
+        const port = searchParams.get("port");
+        const portCwd = port ? await cwdForPort(port) : null;
+        sendJson(res, 200, { ok: true, cwd: process.cwd(), portCwd, panes, claude });
       } catch (error) {
         sendJson(res, 200, { ok: false, error: errorMessage(error) });
       }
@@ -134,21 +136,18 @@ async function resolveTarget(config: BridgeConfig, requestUrl: string): Promise<
   }
 
   // 2. Derive the project from the dev-server port → cwd → matching Claude pane.
+  // Most specific (deepest path) match wins, so a Claude in $HOME doesn't shadow
+  // one opened in the actual project dir.
   const port = safePort(requestUrl);
   if (port) {
     const cwd = await cwdForPort(port);
-    if (cwd) {
-      const matched = claude.filter((p) => pathMatches(cwd, p.path));
-      if (matched.length === 1 && matched[0]) return { pane: matched[0].id, project: matched[0].path };
-    }
+    const best = bestMatch(cwd, claude);
+    if (best) return { pane: best.id, project: best.path };
   }
 
   // 3. Configured project path.
-  const projectPath = config.projectPath;
-  if (projectPath) {
-    const matched = claude.filter((p) => pathMatches(projectPath, p.path));
-    if (matched.length === 1 && matched[0]) return { pane: matched[0].id, project: matched[0].path };
-  }
+  const byConfig = bestMatch(config.projectPath, claude);
+  if (byConfig) return { pane: byConfig.id, project: byConfig.path };
 
   // 4. Exactly one Claude pane anywhere.
   if (claude.length === 1 && claude[0]) return { pane: claude[0].id, project: claude[0].path };
@@ -158,6 +157,15 @@ async function resolveTarget(config: BridgeConfig, requestUrl: string): Promise<
 
 function pathMatches(project: string, pane: string): boolean {
   return pane === project || pane.startsWith(`${project}/`) || project.startsWith(`${pane}/`);
+}
+
+/** The matching pane with the deepest (most specific) path, or null. */
+function bestMatch(project: string | null, panes: TmuxPane[]): TmuxPane | null {
+  if (!project) return null;
+  const matched = panes
+    .filter((p) => pathMatches(project, p.path))
+    .sort((a, b) => b.path.length - a.path.length);
+  return matched[0] ?? null;
 }
 
 function safePort(raw: string): string | null {
