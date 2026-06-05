@@ -1,0 +1,35 @@
+{
+  "name": "claude-tmux-bridge",
+  "version": "0.1.0",
+  "description": "Select a DOM element in your browser and send it, with a change request, straight into a Claude Code session running in a tmux pane.",
+  "type": "module",
+  "bin": {
+    "claude-tmux-bridge": "./bin/cli.mjs"
+  },
+  "scripts": {
+    "start": "tsx src/cli.ts start",
+    "panes": "tsx src/cli.ts panes",
+    "target": "tsx src/cli.ts target",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "tmux",
+    "devtools",
+    "browser"
+  ],
+  "author": "aristeoibarra <aristeoibarra608@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
