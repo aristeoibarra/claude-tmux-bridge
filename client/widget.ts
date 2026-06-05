@@ -78,10 +78,14 @@ interface PickedItem {
       .status { font-size: 12px; margin-top: 8px; min-height: 16px; }
       .status.ok { color: #6ee7a8; }
       .status.err { color: #ff8a8a; }
+      .dest { font-size: 11px; margin-bottom: 8px; color: #8a8a8a; }
+      .dest.ok { color: #6ee7a8; }
+      .dest.err { color: #ff8a8a; }
     </style>
     <button class="fab">◎ Select → Claude</button>
     <div class="overlay"></div>
     <div class="panel">
+      <div class="dest"></div>
       <div class="chips"></div>
       <div class="focused" hidden>
         <div class="name"></div>
@@ -118,6 +122,43 @@ interface PickedItem {
   const shot = q<HTMLInputElement>(".shot");
   const sendBtn = q<HTMLButtonElement>(".send");
   const status = q<HTMLDivElement>(".status");
+  const dest = q<HTMLDivElement>(".dest");
+
+  const PREFS_KEY = "ctb-prefs";
+  try {
+    const prefs = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as {
+      autoSend?: boolean;
+      shot?: boolean;
+    };
+    if (typeof prefs.autoSend === "boolean") autosend.checked = prefs.autoSend;
+    if (typeof prefs.shot === "boolean") shot.checked = prefs.shot;
+  } catch {
+    /* ignore */
+  }
+  const savePrefs = (): void => {
+    try {
+      localStorage.setItem(
+        PREFS_KEY,
+        JSON.stringify({ autoSend: autosend.checked, shot: shot.checked }),
+      );
+    } catch {
+      /* ignore */
+    }
+  };
+
+  async function updateDest(): Promise<void> {
+    dest.textContent = "resolving…";
+    dest.className = "dest";
+    try {
+      const r = await fetch(`${__BRIDGE_ORIGIN__}/resolve?url=${encodeURIComponent(location.href)}`);
+      const d = (await r.json()) as { ok: boolean; project?: string };
+      dest.textContent = d.ok ? `→ ${d.project}` : "→ no Claude pane for this project";
+      dest.className = d.ok ? "dest ok" : "dest err";
+    } catch {
+      dest.textContent = "→ bridge offline";
+      dest.className = "dest err";
+    }
+  }
 
   let selecting = false;
   let focused: Element | null = null;
@@ -168,6 +209,7 @@ interface PickedItem {
     setFocused(el);
     panel.classList.add("open");
     setStatus("", "");
+    void updateDest();
     textarea.focus();
   }
 
@@ -314,6 +356,8 @@ interface PickedItem {
     drawOverlay(null);
   });
   sendBtn.addEventListener("click", () => void send());
+  autosend.addEventListener("change", savePrefs);
+  shot.addEventListener("change", savePrefs);
   document.addEventListener("mousemove", onMove, true);
   document.addEventListener("click", onClick, true);
   document.addEventListener("keydown", onKey, true);

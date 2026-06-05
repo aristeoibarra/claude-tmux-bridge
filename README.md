@@ -1,131 +1,107 @@
 # claude-tmux-bridge
 
-Select DOM elements in your browser, describe a change, and have it land **directly
-in the prompt of a Claude Code session running in a tmux pane** — with the React
+Select DOM elements in your browser, describe a change, and have it land **in the
+prompt of the Claude Code session running in the matching tmux pane** — with the React
 component name, a clean selector, computed styles, and an optional screenshot.
 
+Built for working across **many Next.js + React + TS projects** with zero per-project
+setup: one global bridge, one bookmarklet, automatic routing.
+
 ```
-Browser widget  ──HTTP──▶  bridge server  ──tmux paste-buffer──▶  your Claude Code pane
+  localhost:3000 (project A) ┐
+  localhost:3001 (project B) ┼──▶ bridge :7331 ──▶ port→cwd→Claude pane ──▶ paste
+  localhost:3002 (project C) ┘
 ```
 
-Unlike tools that spawn a fresh, headless Claude invocation, this injects into the
-**interactive session you already have open** — so Claude keeps all its loaded context.
+Unlike tools that spawn a fresh headless Claude, this injects into the **interactive
+session you already have open**, so Claude keeps its loaded context.
+
+## How routing works
+
+The widget sends the page URL. The bridge reads the dev-server **port**, finds the
+process listening on it (`lsof`), takes its **working directory**, and matches the
+Claude Code tmux pane whose cwd is inside that project. No pinning, no config — open as
+many projects as you like at once.
+
+Resolution cascade: pinned pane (if it still exists) → port→cwd→pane → configured
+project → the only Claude pane. It never hard-fails on a stale pane id.
 
 ## Requirements
 
-- tmux (your Claude Code session must run inside a tmux pane)
+- macOS (the `service` command is macOS-only; the rest works anywhere with tmux)
+- tmux — your Claude Code sessions run inside tmux panes
 - Node 20+
-- A React/Next dev app (the example is Next.js 16 + React 19)
+- `lsof` (preinstalled on macOS)
+
+## Setup (once)
+
+```bash
+git clone <repo> ~/claude-tmux-bridge && cd ~/claude-tmux-bridge
+npm install
+npm link                       # makes `claude-tmux-bridge` global
+
+claude-tmux-bridge start       # run it (or: claude-tmux-bridge service install)
+```
+
+Then open **http://localhost:7331** and **drag the bookmarklet** to your bookmarks bar.
+
+### Keep it always running (optional)
+
+```bash
+claude-tmux-bridge service install     # launchd: starts at login, restarts if it dies
+claude-tmux-bridge service status
+claude-tmux-bridge service uninstall
+```
+
+## Daily use (any project)
+
+1. Run your dev server (`npm run dev`)
+2. Open Claude Code in a **tmux pane inside that project's directory**
+3. Click the **◎ Select → Claude** bookmark
+4. **Alt+C** or the button → hover → click an element
+5. Refine with **↑ parent / ↓ child**, **+ add another** for multiple elements
+6. Type the change, **Send** — it routes to the right Claude pane automatically
+
+The panel shows **→ <project>** so you know where it will go before sending.
 
 ## What it captures
 
-For each selected element, the prompt includes:
+Per element: **component name + ancestry** (`ProfileCard › ProfileGrid › AppShell`,
+walked from the React fiber, framework wrappers filtered out), a **clean selector**
+(`@medv/finder`, strips Tailwind noise), **computed styles**, role/accessible name,
+bounding box, text, and outer HTML. Optionally a **screenshot** (largest selected
+element) saved to a temp file and referenced by path so Claude can read the image.
 
-- **Component name + ancestry** — `ProfileCard › ProfileGrid › HomePage`, walked from
-  the React fiber. Robust on React 19 (which removed `_debugSource`). This is what
-  lets the agent grep straight to the file.
-- **Clean selector** — via [`@medv/finder`](https://github.com/antonmedv/finder),
-  which strips Tailwind utility-class noise and prefers `id` / `data-testid` / `role`.
-- **Computed styles** — a curated subset (sizing, layout, typography, color, border,
-  effects) so "make it bigger" has real context.
-- **Role / accessible name, bounding box, text, outer HTML.**
-- **Source `file:line`** — only if you enable the optional Babel plugin (see below).
-- **Screenshot** — optional; saved to a temp file and referenced by path so Claude
-  can read the image.
-
-## Setup
-
-```bash
-# 1. In the SAME pane where Claude Code runs, pin it as the target:
-npx claude-tmux-bridge target
-
-# 2. In a SECOND pane, start the bridge:
-npx claude-tmux-bridge start
-```
-
-### Multiple Claude sessions
-
-Skip the pin and start the bridge **from each project directory** — it routes to the
-Claude pane whose working directory matches the project:
-
-```bash
-cd ~/my-project && npx claude-tmux-bridge start          # routes by cwd
-npx claude-tmux-bridge target --clear                    # drop a pin to re-enable routing
-npx claude-tmux-bridge start --project ~/my-project      # or pass it explicitly
-```
-
-Inspect panes anytime: `npx claude-tmux-bridge panes`.
-
-## Wire into a Next.js app
-
-Copy [`examples/ClaudeBridge.tsx`](examples/ClaudeBridge.tsx) into your project and
-mount it in your root layout. It only injects the script when
-`NODE_ENV === "development"`, so production is untouched.
-
-```tsx
-// app/layout.tsx
-import { ClaudeBridge } from "@/components/dev/ClaudeBridge";
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="en">
-      <body>
-        {children}
-        <ClaudeBridge />
-      </body>
-    </html>
-  );
-}
-```
-
-## Using it
-
-- Click **◎ Select → Claude** (bottom-right) or press **Alt+C**.
-- Hover to highlight, click to pick an element.
-- Refine with **↑ parent / ↓ child** (the click often lands on a deep child).
-- **+ add another** to select multiple elements in one request.
-- Toggle **auto-send** (off = paste into the prompt for you to review before sending)
-  and **screenshot** (capture the focused element as an image).
-- Type the change, hit **Send to Claude**.
-
-## Optional: exact `file:line` via Babel
-
-Component name + grep is usually enough. If you want deterministic source locations,
-add a Babel plugin that injects `data-source` onto every element — the widget reads it
-automatically (`el.closest("[data-source]")`).
-
-> **Trade-off:** adding a Babel config makes Next.js 16 fall back from Turbopack to
-> Babel, slowing dev builds. Enable it only when you need it.
-
-```bash
-npm i -D @locator/babel-jsx
-```
-
-```js
-// babel.config.js — Next 16 auto-detects this and runs it through Turbopack's babel-loader
-module.exports = {
-  presets: ["next/babel"],
-  plugins: process.env.NODE_ENV === "development" ? ["@locator/babel-jsx/dist"] : [],
-};
-```
-
-(LocatorJS injects `data-locatorjs-id`; adapt the reader in `client/capture.ts` if you
-use a plugin with a different attribute name.)
+Toggles (remembered across reloads): **auto-send** (off = paste for review first) and
+**📷 screenshot**.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `start [--port N] [--project PATH]` | Start the bridge server (default `:7331`) |
-| `target [%id]` | Pin the target pane (defaults to the current pane) |
-| `target --clear` | Remove the pin and auto-route by project path |
+| `start [--port N] [--project PATH]` | Start the bridge (default `:7331`) |
+| `service <install\|uninstall\|status>` | Run as a launchd service (macOS) |
+| `target [%id\|--clear]` | Pin/clear a target pane (rarely needed) |
 | `panes` | List tmux panes and guess which run Claude Code |
+
+## Loading the widget without the bookmarklet
+
+If a project ships a strict dev-mode CSP that blocks the bookmarklet's script, mount
+the widget from the project instead — copy [`examples/ClaudeBridge.tsx`](examples/ClaudeBridge.tsx)
+into the repo and render `<ClaudeBridge />` in the root layout (dev-only).
+
+## Optional: exact `file:line` via Babel
+
+Component name + grep is usually enough. For deterministic source locations, add a
+Babel plugin that injects `data-source` on every element — the widget reads it
+automatically. **Trade-off:** a Babel config makes Next 16 fall back from Turbopack to
+Babel, slowing dev. Enable only when needed. See `client/capture.ts` for the reader.
 
 ## Security
 
-Development-only by design. The bridge binds to `localhost`, accepts requests from any
-local origin (CORS `*`), and pastes whatever it receives into your pane — so only run
-it on a machine you control, and don't expose the port.
+Development-only. The bridge binds to `localhost`, accepts any local origin, and pastes
+what it receives into your pane. Run it only on a machine you control; don't expose the
+port.
 
 ## License
 

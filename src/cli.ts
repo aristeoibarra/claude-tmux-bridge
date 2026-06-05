@@ -1,4 +1,5 @@
 import { createServer } from "./server.ts";
+import { installService, uninstallService, serviceStatus } from "./service.ts";
 import { loadConfig, saveConfig, CONFIG_FILE, DEFAULT_PORT } from "./config.ts";
 import {
   currentPane,
@@ -24,6 +25,9 @@ async function main(): Promise<void> {
       return;
     case "target":
       await target(rest);
+      return;
+    case "service":
+      await service(rest);
       return;
     case undefined:
     case "help":
@@ -104,25 +108,47 @@ async function target(args: string[]): Promise<void> {
   log(`saved to ${CONFIG_FILE}`);
 }
 
+async function service(args: string[]): Promise<void> {
+  if (process.platform !== "darwin") fail("`service` (launchd) is macOS-only.");
+  switch (args[0]) {
+    case "install": {
+      const plist = await installService();
+      log("service installed and started (runs at login, restarts if it dies).");
+      log(`plist: ${plist}`);
+      log("logs:  ~/Library/Logs/claude-tmux-bridge/");
+      return;
+    }
+    case "uninstall":
+      await uninstallService();
+      log("service stopped and removed.");
+      return;
+    case "status":
+      log(await serviceStatus());
+      return;
+    default:
+      fail("Usage: claude-tmux-bridge service <install|uninstall|status>");
+  }
+}
+
 function printHelp(): void {
   log(
     [
       "claude-tmux-bridge — send selected browser elements into a Claude Code tmux pane",
       "",
       "Usage:",
-      "  claude-tmux-bridge start [--port N] [--project PATH]",
-      "      Start the bridge server (default :" + DEFAULT_PORT + ")",
-      "  claude-tmux-bridge target [%id|--clear]",
-      "      Pin the target pane (defaults to the current pane), or clear it",
-      "  claude-tmux-bridge panes",
-      "      List tmux panes and guess which run Claude Code",
+      "  start [--port N] [--project PATH]    Start the bridge (default :" + DEFAULT_PORT + ")",
+      "  service <install|uninstall|status>  Run the bridge as a launchd service (macOS)",
+      "  target [%id|--clear]               Pin/clear a target pane (rarely needed)",
+      "  panes                              List tmux panes and guess which run Claude",
       "",
-      "Typical setup (single project):",
-      "  1. In your Claude Code pane:  npx claude-tmux-bridge target",
-      "  2. In a second pane:          npx claude-tmux-bridge start",
+      "Setup (once):",
+      "  1. npm link                  Make the CLI global",
+      "  2. claude-tmux-bridge start  (or `service install` to auto-start at login)",
+      "  3. open http://localhost:" + DEFAULT_PORT + "  and drag the bookmarklet to your bar",
       "",
-      "Multiple Claude sessions: skip the pin and run `start` from each project dir —",
-      "the bridge routes by the pane's working directory.",
+      "Then in any project: run the dev server, open Claude Code in a tmux pane inside",
+      "the project dir, click the bookmarklet, select, send. Routing is automatic",
+      "(dev-server port -> project dir -> matching Claude pane).",
     ].join("\n"),
   );
 }

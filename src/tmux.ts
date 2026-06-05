@@ -65,6 +65,26 @@ export async function detectClaudePanes(): Promise<TmuxPane[]> {
   );
 }
 
+/** Working directory of the process listening on a TCP port (the dev server). */
+export async function cwdForPort(port: string): Promise<string | null> {
+  if (!/^\d+$/.test(port)) return null;
+  try {
+    const { stdout: pidOut } = await execFileAsync("lsof", [
+      "-nP",
+      `-iTCP:${port}`,
+      "-sTCP:LISTEN",
+      "-t",
+    ]);
+    const pid = pidOut.split("\n")[0]?.trim();
+    if (!pid) return null;
+    const { stdout: cwdOut } = await execFileAsync("lsof", ["-a", "-p", pid, "-d", "cwd", "-Fn"]);
+    const line = cwdOut.split("\n").find((l) => l.startsWith("n"));
+    return line ? line.slice(1) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Inject text into a pane as a bracketed paste. With `submit`, also press Enter
  * to send it; otherwise the text is left in the prompt for the user to review.

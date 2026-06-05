@@ -1,17 +1,23 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, basename } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as esbuild from "esbuild";
 
 import type { BridgeConfig } from "./config.ts";
-import { detectClaudePanes, injectToPane } from "./tmux.ts";
+import { cwdForPort, detectClaudePanes, injectToPane } from "./tmux.ts";
 import { formatPrompt, isSendPayload } from "./format.ts";
+import { bookmarkletPage } from "./bookmarklet.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIDGET_ENTRY = join(__dirname, "..", "client", "widget.ts");
-const MAX_BODY_BYTES = 1_000_000;
+const MAX_BODY_BYTES = 5_000_000;
+
+interface Resolved {
+  pane: string;
+  project: string;
+}
 
 export function createServer(config: BridgeConfig) {
   let widgetCache: string | null = null;
@@ -24,12 +30,9 @@ export function createServer(config: BridgeConfig) {
       format: "iife",
       target: "es2020",
       write: false,
-      define: {
-        __BRIDGE_ORIGIN__: JSON.stringify(`http://localhost:${config.port}`),
-      },
+      define: { __BRIDGE_ORIGIN__: JSON.stringify(`http://localhost:${config.port}`) },
     });
-    const file = result.outputFiles[0];
-    widgetCache = file ? file.text : "";
+    widgetCache = result.outputFiles[0]?.text ?? "";
     return widgetCache;
   }
 
@@ -41,32 +44,37 @@ export function createServer(config: BridgeConfig) {
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     setCors(res);
-
     if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
       return;
     }
 
-    const url = req.url ?? "/";
+    const { pathname, searchParams } = new URL(req.url ?? "/", "http://localhost");
 
-    if (req.method === "GET" && url.startsWith("/health")) {
+    if (req.method === "GET" && pathname === "/health") {
       sendJson(res, 200, { ok: true, targetPane: config.targetPane });
       return;
     }
-
-    if (req.method === "GET" && url.startsWith("/widget.js")) {
-      const code = await buildWidget();
-      res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
-      res.end(code);
+    if (req.method === "GET" && (pathname === "/" || pathname === "/index.html")) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(bookmarkletPage(config.port));
       return;
     }
-
-    if (req.method === "POST" && url.startsWith("/send")) {
+    if (req.method === "GET" && pathname === "/widget.js") {
+      res.writeHead(200, { "content-type": "application/javascript; charset=utf-8" });
+      res.end(await buildWidget());
+      return;
+    }
+    if (req.method === "GET" && pathname === "/resolve") {
+      const resolved = await resolveTarget(config, searchParams.get("url") ?? "");
+      sendJson(res, 200, resolved ? { ok: true, project: basename(resolved.project), pane: resolved.pane } : { ok: false });
+      return;
+    }
+    if (req.method === "POST" && pathname === "/send") {
       await handleSend(req, res);
       return;
     }
-
     sendJson(res, 404, { ok: false, error: "not found" });
   }
 
@@ -79,42 +87,77 @@ export function createServer(config: BridgeConfig) {
       sendJson(res, 400, { ok: false, error: "invalid JSON" });
       return;
     }
-
     if (!isSendPayload(parsed)) {
-      sendJson(res, 400, { ok: false, error: "missing message/url" });
+      sendJson(res, 400, { ok: false, error: "missing message/url/elements" });
       return;
     }
 
-    const target = await resolveTarget(config);
-    if (!target) {
+    const resolved = await resolveTarget(config, parsed.url);
+    if (!resolved) {
       sendJson(res, 409, {
         ok: false,
         error:
-          "No target pane. Run `claude-tmux-bridge target` from this Claude Code session, or set one explicitly.",
+          "No Claude pane found for this project. Open Claude Code in a tmux pane inside the project dir, or pin one with `claude-tmux-bridge target`.",
       });
       return;
     }
 
     const screenshotPath = parsed.screenshot ? await saveScreenshot(parsed.screenshot) : null;
     const prompt = formatPrompt(parsed, screenshotPath);
-    await injectToPane(target, prompt, parsed.autoSubmit !== false);
-    sendJson(res, 200, { ok: true, targetPane: target, screenshot: screenshotPath });
+    await injectToPane(resolved.pane, prompt, parsed.autoSubmit !== false);
+    sendJson(res, 200, {
+      ok: true,
+      targetPane: resolved.pane,
+      project: basename(resolved.project),
+      screenshot: screenshotPath,
+    });
   }
 }
 
-async function resolveTarget(config: BridgeConfig): Promise<string | null> {
-  if (config.targetPane) return config.targetPane;
-  const claudePanes = await detectClaudePanes();
-  if (claudePanes.length === 1) return claudePanes[0]?.id ?? null;
+/** Resolve the destination pane in cascade, tolerant of ephemeral pane ids. */
+async function resolveTarget(config: BridgeConfig, requestUrl: string): Promise<Resolved | null> {
+  const claude = await detectClaudePanes();
+  if (claude.length === 0) return null;
 
-  // Multiple Claude panes: match the one whose cwd belongs to this project.
-  const project = config.projectPath ?? process.cwd();
-  const matched = claudePanes.filter((p) => pathMatches(project, p.path));
-  return matched.length === 1 ? (matched[0]?.id ?? null) : null;
+  // 1. Explicit pin — only if the pinned pane still exists.
+  if (config.targetPane) {
+    const pinned = claude.find((p) => p.id === config.targetPane);
+    if (pinned) return { pane: pinned.id, project: pinned.path };
+  }
+
+  // 2. Derive the project from the dev-server port → cwd → matching Claude pane.
+  const port = safePort(requestUrl);
+  if (port) {
+    const cwd = await cwdForPort(port);
+    if (cwd) {
+      const matched = claude.filter((p) => pathMatches(cwd, p.path));
+      if (matched.length === 1 && matched[0]) return { pane: matched[0].id, project: matched[0].path };
+    }
+  }
+
+  // 3. Configured project path.
+  const projectPath = config.projectPath;
+  if (projectPath) {
+    const matched = claude.filter((p) => pathMatches(projectPath, p.path));
+    if (matched.length === 1 && matched[0]) return { pane: matched[0].id, project: matched[0].path };
+  }
+
+  // 4. Exactly one Claude pane anywhere.
+  if (claude.length === 1 && claude[0]) return { pane: claude[0].id, project: claude[0].path };
+
+  return null;
 }
 
 function pathMatches(project: string, pane: string): boolean {
   return pane === project || pane.startsWith(`${project}/`) || project.startsWith(`${pane}/`);
+}
+
+function safePort(raw: string): string | null {
+  try {
+    return new URL(raw).port || null;
+  } catch {
+    return null;
+  }
 }
 
 async function saveScreenshot(dataUrl: string): Promise<string | null> {
