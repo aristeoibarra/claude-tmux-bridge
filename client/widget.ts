@@ -563,6 +563,7 @@ const ICON_GEAR =
       shotFailed = screenshot === null;
     }
 
+    const pinned = prefs.targetPane;
     try {
       const res = await fetch(`${BRIDGE_ORIGIN}/send`, {
         method: "POST",
@@ -573,27 +574,78 @@ const ICON_GEAR =
           elements,
           screenshot,
           autoSubmit: autosend.checked,
-          targetPane: prefs.targetPane,
+          targetPane: pinned,
           diagnostics: getDiagnostics(),
         }),
       });
-      const data = (await res.json()) as { ok: boolean; error?: string };
-      if (data.ok) {
-        setStatus(shotFailed ? "Sent (screenshot failed, sent without it)." : "Sent to Claude.", "ok");
-        textarea.value = "";
-        picked.length = 0;
-        focused = null;
-        renderChips();
-        pickedBox.hidden = true;
-        setTimeout(goIdle, 800);
-      } else {
+      const data = (await res.json()) as {
+        ok: boolean;
+        error?: string;
+        targetPane?: string;
+        project?: string;
+      };
+      if (!data.ok) {
         setStatus(data.error ?? "Failed.", "err");
+        return;
       }
+
+      textarea.value = "";
+      picked.length = 0;
+      focused = null;
+      renderChips();
+      pickedBox.hidden = true;
+
+      const notes: string[] = [];
+      if (shotFailed) notes.push("screenshot failed");
+      if (pinned && data.targetPane && data.targetPane !== pinned) {
+        // Pane ids never come back once gone — drop the dead pin instead of
+        // silently re-routing on every send.
+        prefs.targetPane = null;
+        savePrefs();
+        void loadSessions();
+        notes.push("pinned session was gone, auto-routed");
+      }
+      const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
+      const project = data.project ?? "Claude";
+      if (!autosend.checked) {
+        setStatus(`Pasted into ${project} — review and press Enter${suffix}.`, "ok");
+        window.setTimeout(goIdle, 2200);
+        return;
+      }
+      setStatus(`Sent to ${project}${suffix}.`, "ok");
+      watchPaneTitle(data.targetPane);
     } catch {
       setStatus(`Bridge not reachable at ${BRIDGE_ORIGIN}.`, "err");
     } finally {
       sendBtn.disabled = false;
     }
+  }
+
+  /**
+   * Claude Code mirrors its current task into the tmux pane title, so one
+   * delayed poll turns "sent" into "Claude: <what it's doing>" — the closest
+   * thing to a feedback loop without holding a connection open.
+   */
+  function watchPaneTitle(pane: string | undefined): void {
+    if (!pane) {
+      window.setTimeout(goIdle, 1500);
+      return;
+    }
+    window.setTimeout(() => {
+      void (async () => {
+        try {
+          const r = await fetch(`${BRIDGE_ORIGIN}/pane-title?pane=${encodeURIComponent(pane)}`);
+          const d = (await r.json()) as { ok: boolean; title?: string };
+          if (d.ok && d.title) {
+            const title = d.title.length > 70 ? `${d.title.slice(0, 70)}…` : d.title;
+            setStatus(`Claude: ${title}`, "ok");
+          }
+        } catch {
+          /* bridge hiccup — keep the sent confirmation */
+        }
+        window.setTimeout(goIdle, 2500);
+      })();
+    }, 1800);
   }
 
   function setStatus(text: string, kind: "ok" | "err" | ""): void {

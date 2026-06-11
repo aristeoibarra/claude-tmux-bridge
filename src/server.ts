@@ -92,6 +92,19 @@ export function createServer(config: BridgeConfig) {
       }
       return;
     }
+    if (req.method === "GET" && pathname === "/pane-title") {
+      // Claude Code mirrors its current task into the pane title — this is the
+      // widget's only feedback channel for "did Claude pick it up?".
+      const id = searchParams.get("pane");
+      try {
+        const panes = await listPanes();
+        const pane = panes.find((p) => p.id === id);
+        sendJson(res, 200, pane ? { ok: true, title: pane.title } : { ok: false });
+      } catch {
+        sendJson(res, 200, { ok: false });
+      }
+      return;
+    }
     if (req.method === "POST" && pathname === "/send") {
       await handleSend(req, res);
       return;
