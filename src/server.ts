@@ -211,7 +211,8 @@ async function saveScreenshot(dataUrl: string): Promise<string | null> {
   if (!match?.[1]) return null;
   const dir = join(tmpdir(), "claude-tmux-bridge");
   await mkdir(dir, { recursive: true });
-  const file = join(dir, `shot-${Date.now()}.png`);
+  // Random suffix: two quick sends can land on the same millisecond.
+  const file = join(dir, `shot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`);
   await writeFile(file, Buffer.from(match[1], "base64"));
   return file;
 }

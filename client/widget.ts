@@ -20,9 +20,11 @@ interface SessionInfo {
   path: string;
 }
 
+type ShotMode = "off" | "element" | "viewport";
+
 interface Prefs {
   autoSend: boolean;
-  shot: boolean;
+  shotMode: ShotMode;
   /** Pane id chosen in Settings, or null for auto-routing. Persisted per origin. */
   targetPane: string | null;
 }
@@ -215,11 +217,15 @@ const ICON_GEAR =
             <input type="checkbox" class="autosend"> auto-send
             <span class="hint">off: paste only</span>
           </label>
-          <label title="Attach a PNG of the selected element so Claude can see how it renders.">
-            <input type="checkbox" class="shot"> screenshot
-            <span class="hint">📷 attach PNG</span>
-          </label>
         </div>
+      </div>
+      <div class="field">
+        <label>Screenshot</label>
+        <select class="shotmode">
+          <option value="off">Off</option>
+          <option value="element">Selected element only</option>
+          <option value="viewport">Viewport, selection highlighted</option>
+        </select>
       </div>
     </div>
   `;
@@ -236,7 +242,7 @@ const ICON_GEAR =
   const metaEl = q<HTMLDivElement>(".meta");
   const textarea = q<HTMLTextAreaElement>("textarea");
   const autosend = q<HTMLInputElement>(".autosend");
-  const shot = q<HTMLInputElement>(".shot");
+  const shotMode = q<HTMLSelectElement>(".shotmode");
   const sessionSelect = q<HTMLSelectElement>(".session");
   const sendBtn = q<HTMLButtonElement>(".send");
   const status = q<HTMLDivElement>(".status");
@@ -246,17 +252,22 @@ const ICON_GEAR =
   gear.innerHTML = ICON_GEAR;
 
   const PREFS_KEY = "ctb-prefs";
-  const prefs: Prefs = { autoSend: true, shot: false, targetPane: null };
+  const prefs: Prefs = { autoSend: true, shotMode: "off", targetPane: null };
   try {
-    const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
+    const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs> & {
+      shot?: boolean; // pre-shotMode prefs shape
+    };
     if (typeof saved.autoSend === "boolean") prefs.autoSend = saved.autoSend;
-    if (typeof saved.shot === "boolean") prefs.shot = saved.shot;
+    if (typeof saved.shot === "boolean") prefs.shotMode = saved.shot ? "element" : "off";
+    if (saved.shotMode === "off" || saved.shotMode === "element" || saved.shotMode === "viewport") {
+      prefs.shotMode = saved.shotMode;
+    }
     if (typeof saved.targetPane === "string") prefs.targetPane = saved.targetPane;
   } catch {
     /* ignore */
   }
   autosend.checked = prefs.autoSend;
-  shot.checked = prefs.shot;
+  shotMode.value = prefs.shotMode;
 
   const savePrefs = (): void => {
     try {
@@ -464,6 +475,63 @@ const ICON_GEAR =
     });
   }
 
+  const area = (el: Element): number => {
+    const r = el.getBoundingClientRect();
+    return r.width * r.height;
+  };
+
+  /** PNG of the largest selected element — a tight crop, no surroundings. */
+  function captureElement(targets: Element[]): Promise<string | null> {
+    const target = targets.reduce<Element | null>(
+      (best, el) => (best && area(best) >= area(el) ? best : el),
+      null,
+    );
+    if (!target) return Promise.resolve(null);
+    return domToPng(target, { scale: 1, backgroundColor: "#ffffff" });
+  }
+
+  /** The whole visible viewport with every selected element outlined — context, not a crop. */
+  async function captureViewport(targets: Element[]): Promise<string | null> {
+    const boxes = targets.map((el) => el.getBoundingClientRect());
+    const png = await domToPng(document.body, {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      backgroundColor: "#ffffff",
+      filter: (node) => !(node instanceof Element && node.id === ROOT_ID),
+      style: {
+        transform: `translate(${-window.scrollX}px, ${-window.scrollY}px)`,
+        transformOrigin: "top left",
+      },
+    });
+    return drawHighlights(png, boxes);
+  }
+
+  function drawHighlights(dataUrl: string, boxes: DOMRect[]): Promise<string> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const scale = img.width / window.innerWidth;
+        ctx.strokeStyle = "#d97757";
+        ctx.lineWidth = Math.max(2, 3 * scale);
+        for (const r of boxes) {
+          ctx.strokeRect(r.x * scale, r.y * scale, r.width * scale, r.height * scale);
+        }
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  }
+
   async function send(): Promise<void> {
     const elements = [...picked.map((p) => p.payload)];
     if (focused) elements.push(buildElementPayload(focused));
@@ -481,21 +549,18 @@ const ICON_GEAR =
     setStatus("Sending…", "");
 
     let screenshot: string | null = null;
-    const area = (el: Element): number => {
-      const r = el.getBoundingClientRect();
-      return r.width * r.height;
-    };
-    const shotCandidates = [...picked.map((p) => p.element), ...(focused ? [focused] : [])];
-    const shotTarget = shotCandidates.reduce<Element | null>(
-      (best, el) => (best && area(best) >= area(el) ? best : el),
-      null,
-    );
-    if (shot.checked && shotTarget) {
+    let shotFailed = false;
+    const shotTargets = [...picked.map((p) => p.element), ...(focused ? [focused] : [])];
+    if (prefs.shotMode !== "off") {
       try {
-        screenshot = await domToPng(shotTarget, { scale: 1, backgroundColor: "#ffffff" });
+        screenshot =
+          prefs.shotMode === "viewport"
+            ? await captureViewport(shotTargets)
+            : await captureElement(shotTargets);
       } catch {
         screenshot = null;
       }
+      shotFailed = screenshot === null;
     }
 
     try {
@@ -514,7 +579,7 @@ const ICON_GEAR =
       });
       const data = (await res.json()) as { ok: boolean; error?: string };
       if (data.ok) {
-        setStatus("Sent to Claude.", "ok");
+        setStatus(shotFailed ? "Sent (screenshot failed, sent without it)." : "Sent to Claude.", "ok");
         textarea.value = "";
         picked.length = 0;
         focused = null;
@@ -551,8 +616,9 @@ const ICON_GEAR =
     prefs.autoSend = autosend.checked;
     savePrefs();
   });
-  shot.addEventListener("change", () => {
-    prefs.shot = shot.checked;
+  shotMode.addEventListener("change", () => {
+    const value = shotMode.value;
+    prefs.shotMode = value === "element" || value === "viewport" ? value : "off";
     savePrefs();
   });
   sessionSelect.addEventListener("change", () => {
