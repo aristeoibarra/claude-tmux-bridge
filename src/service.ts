@@ -63,7 +63,17 @@ export async function installService(): Promise<string> {
   await mkdir(LOG_DIR, { recursive: true });
   await writeFile(PLIST, plistContent(), "utf8");
   await execFileAsync("launchctl", ["bootout", `${domain()}/${LABEL}`]).catch(() => {});
-  await execFileAsync("launchctl", ["bootstrap", domain(), PLIST]);
+  // bootout returns before the old job finishes draining; bootstrapping too soon
+  // fails with "Bootstrap failed: 5: Input/output error". Retry briefly.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await execFileAsync("launchctl", ["bootstrap", domain(), PLIST]);
+      break;
+    } catch (error) {
+      if (attempt >= 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
   return PLIST;
 }
 
