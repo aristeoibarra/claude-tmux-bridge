@@ -7,9 +7,10 @@
  * Host elements only — lowercase tags become real DOM attributes. Stamping
  * <MyComponent> would only add an unused prop (and noise in captured props).
  *
- * Trade-off: any Babel config makes Next fall back from Turbopack to Babel,
- * slowing dev. Mount it per project, dev-only — see the README section
- * "Optional: exact file:line via Babel".
+ * Cost: Next 16.2+ keeps Turbopack and runs the Babel config as an external
+ * transform (measured cold-compile cost within noise); older Next falls back
+ * from Turbopack to Babel, which is slower. Mount it per project, dev-only —
+ * see the README section "Optional: exact file:line via Babel".
  */
 "use strict";
 

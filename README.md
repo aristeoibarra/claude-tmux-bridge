@@ -155,9 +155,10 @@ module.exports = {
 };
 ```
 
-**Trade-off:** any Babel config makes Next 16 fall back from Turbopack to Babel, slowing
-dev — enable per project only when you really need `file:line`. Delete the file to go
-back to Turbopack. See `client/capture.ts` for the reader.
+**Cost:** on Next 16.2+ Turbopack stays and loads the Babel config as an external
+transform ("Using external babel configuration" in the dev log) — measured cold-compile
+cost was within noise. Older Next versions fall back from Turbopack to Babel, which is
+slower. Delete the file to disable. See `client/capture.ts` for the reader.
 
 ## Security
 
