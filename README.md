@@ -139,10 +139,25 @@ into the repo and render `<ClaudeBridge />` in the root layout (dev-only).
 
 ## Optional: exact `file:line` via Babel
 
-Component name + grep is usually enough. For deterministic source locations, add a
-Babel plugin that injects `data-source` on every element — the widget reads it
-automatically. **Trade-off:** a Babel config makes Next 16 fall back from Turbopack to
-Babel, slowing dev. Enable only when needed. See `client/capture.ts` for the reader.
+Component name + grep is usually enough. For deterministic source locations, mount the
+bundled plugin [`examples/babel-plugin-data-source.cjs`](examples/babel-plugin-data-source.cjs):
+it stamps every JSX **host** element with `data-source="src/Card.tsx:3"` (components are
+skipped — they'd just gain an unused prop), and the widget picks it up automatically.
+
+```js
+// babel.config.js in the project (dev-only)
+module.exports = {
+  presets: ["next/babel"],
+  plugins:
+    process.env.NODE_ENV === "development"
+      ? ["/path/to/claude-tmux-bridge/examples/babel-plugin-data-source.cjs"]
+      : [],
+};
+```
+
+**Trade-off:** any Babel config makes Next 16 fall back from Turbopack to Babel, slowing
+dev — enable per project only when you really need `file:line`. Delete the file to go
+back to Turbopack. See `client/capture.ts` for the reader.
 
 ## Security
 
