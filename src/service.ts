@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir, writeFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -16,6 +17,18 @@ function binPath(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "cli.js");
 }
 
+/**
+ * Under fnm, process.execPath points into a versioned dir that disappears when
+ * that Node version is uninstalled — and the service dies silently. Prefer the
+ * stable `default` alias symlink when it exists.
+ */
+function nodePath(): string {
+  if (!process.execPath.includes("/fnm/node-versions/")) return process.execPath;
+  const fnmRoot = process.env.FNM_DIR ?? join(homedir(), ".local", "share", "fnm");
+  const alias = join(fnmRoot, "aliases", "default", "bin", "node");
+  return existsSync(alias) ? alias : process.execPath;
+}
+
 function plistContent(): string {
   // launchd starts with a minimal PATH; include common locations for tmux/lsof/node.
   const path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -26,7 +39,7 @@ function plistContent(): string {
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${process.execPath}</string>
+    <string>${nodePath()}</string>
     <string>${binPath()}</string>
     <string>start</string>
   </array>
