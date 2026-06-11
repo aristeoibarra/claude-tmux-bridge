@@ -22,11 +22,23 @@ interface SessionInfo {
 
 type ShotMode = "off" | "element" | "viewport";
 
+interface Hotkey {
+  /** KeyboardEvent.code — layout-independent (Alt+C yields "ç" in e.key on macOS). */
+  code: string;
+  alt: boolean;
+  ctrl: boolean;
+  shift: boolean;
+  meta: boolean;
+}
+
+const DEFAULT_HOTKEY: Hotkey = { code: "KeyC", alt: true, ctrl: false, shift: false, meta: false };
+
 interface Prefs {
   autoSend: boolean;
   shotMode: ShotMode;
   /** Pane id chosen in Settings, or null for auto-routing. Persisted per origin. */
   targetPane: string | null;
+  hotkey: Hotkey;
 }
 
 // Inline SVGs (no external assets — the widget is a single bundle).
@@ -166,6 +178,12 @@ const ICON_GEAR =
         font-size: 11px; cursor: pointer; padding: 0;
       }
       .field .refresh:hover { color: #aaa; }
+      .field button.hotkey {
+        width: 100%; text-align: left; border: 1px solid #3a3a3a; border-radius: 10px;
+        padding: 9px 12px; font-size: 12px; background: #0f0f0f; color: #f5f5f5; cursor: pointer;
+      }
+      .field button.hotkey:hover { border-color: #d97757; }
+      .field button.hotkey.recording { border-color: #d97757; color: #f5b78f; }
       .toggles { display: flex; flex-direction: column; gap: 12px; font-size: 13px; color: #ddd; }
       .toggles label { display: flex; align-items: center; gap: 9px; cursor: pointer; }
       .toggles .hint { color: #777; font-size: 11px; margin-left: auto; }
@@ -227,6 +245,10 @@ const ICON_GEAR =
           <option value="viewport">Viewport, selection highlighted</option>
         </select>
       </div>
+      <div class="field">
+        <label>Selection shortcut</label>
+        <button class="hotkey"></button>
+      </div>
     </div>
   `;
 
@@ -252,7 +274,12 @@ const ICON_GEAR =
   gear.innerHTML = ICON_GEAR;
 
   const PREFS_KEY = "ctb-prefs";
-  const prefs: Prefs = { autoSend: true, shotMode: "off", targetPane: null };
+  const prefs: Prefs = {
+    autoSend: true,
+    shotMode: "off",
+    targetPane: null,
+    hotkey: { ...DEFAULT_HOTKEY },
+  };
   try {
     const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs> & {
       shot?: boolean; // pre-shotMode prefs shape
@@ -263,11 +290,53 @@ const ICON_GEAR =
       prefs.shotMode = saved.shotMode;
     }
     if (typeof saved.targetPane === "string") prefs.targetPane = saved.targetPane;
+    if (typeof saved.hotkey === "object" && saved.hotkey !== null && typeof saved.hotkey.code === "string") {
+      prefs.hotkey = {
+        code: saved.hotkey.code,
+        alt: saved.hotkey.alt === true,
+        ctrl: saved.hotkey.ctrl === true,
+        shift: saved.hotkey.shift === true,
+        meta: saved.hotkey.meta === true,
+      };
+    }
   } catch {
     /* ignore */
   }
   autosend.checked = prefs.autoSend;
   shotMode.value = prefs.shotMode;
+
+  function hotkeyLabel(h: Hotkey): string {
+    const parts: string[] = [];
+    if (h.ctrl) parts.push("Ctrl");
+    if (h.alt) parts.push("Alt");
+    if (h.shift) parts.push("Shift");
+    if (h.meta) parts.push("⌘");
+    parts.push(h.code.replace(/^(?:Key|Digit)/, ""));
+    return parts.join("+");
+  }
+
+  function matchesHotkey(e: KeyboardEvent, h: Hotkey): boolean {
+    return (
+      e.code === h.code &&
+      e.altKey === h.alt &&
+      e.ctrlKey === h.ctrl &&
+      e.shiftKey === h.shift &&
+      e.metaKey === h.meta
+    );
+  }
+
+  const selectTitle = (): string => `Select an element (${hotkeyLabel(prefs.hotkey)})`;
+
+  let recordingHotkey = false;
+  const hotkeyBtn = q<HTMLButtonElement>(".hotkey");
+
+  function refreshHotkeyUi(): void {
+    hotkeyBtn.textContent = recordingHotkey
+      ? "press the new combo… (Esc cancels)"
+      : hotkeyLabel(prefs.hotkey);
+    hotkeyBtn.classList.toggle("recording", recordingHotkey);
+    fab.title = selectTitle();
+  }
 
   const savePrefs = (): void => {
     try {
@@ -350,7 +419,7 @@ const ICON_GEAR =
     selecting = false;
     fab.innerHTML = ICON_AI;
     fab.classList.remove("armed");
-    fab.title = "Select an element (Alt+C)";
+    fab.title = selectTitle();
     panel.classList.remove("open");
     settings.classList.remove("open");
     drawOverlay(null);
@@ -414,12 +483,30 @@ const ICON_GEAR =
   }
 
   function onKey(e: KeyboardEvent): void {
+    if (recordingHotkey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        recordingHotkey = false;
+        refreshHotkeyUi();
+        return;
+      }
+      if (/^(?:Alt|Control|Shift|Meta)/.test(e.code)) return; // modifier alone — wait for the key
+      if (!e.altKey && !e.ctrlKey && !e.metaKey) {
+        hotkeyBtn.textContent = "add Alt, Ctrl or ⌘ to the key…";
+        return;
+      }
+      prefs.hotkey = { code: e.code, alt: e.altKey, ctrl: e.ctrlKey, shift: e.shiftKey, meta: e.metaKey };
+      savePrefs();
+      recordingHotkey = false;
+      refreshHotkeyUi();
+      return;
+    }
     if (e.key === "Escape") {
       goIdle();
       return;
     }
-    // e.code is layout/modifier independent — on macOS Alt+C yields "ç" in e.key.
-    if (e.altKey && e.code === "KeyC") {
+    if (matchesHotkey(e, prefs.hotkey)) {
       e.preventDefault();
       startSelect();
     }
@@ -678,11 +765,18 @@ const ICON_GEAR =
     savePrefs();
     if (panel.classList.contains("open")) void updateDest();
   });
+  hotkeyBtn.addEventListener("click", () => {
+    recordingHotkey = !recordingHotkey;
+    refreshHotkeyUi();
+  });
   document.addEventListener("mousemove", onMove, true);
   document.addEventListener("click", onClick, true);
   document.addEventListener("keydown", onKey, true);
   window.addEventListener("scroll", () => focused && drawOverlay(focused), true);
 
+  refreshHotkeyUi();
   void loadSessions();
-  console.info("[claude-tmux-bridge] widget ready — Alt+C or the button to select an element.");
+  console.info(
+    `[claude-tmux-bridge] widget ready — ${hotkeyLabel(prefs.hotkey)} or the button to select an element.`,
+  );
 })();
