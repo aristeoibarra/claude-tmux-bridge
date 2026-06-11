@@ -14,6 +14,13 @@ export interface ElementPayload {
   html: string;
 }
 
+export interface DiagnosticsPayload {
+  /** console.error / uncaught exceptions / unhandled rejections, oldest first. */
+  errors: string[];
+  /** Failed fetches: "GET /api/x → 500", oldest first. */
+  network: string[];
+}
+
 export interface SendPayload {
   message: string;
   url: string;
@@ -22,6 +29,7 @@ export interface SendPayload {
   autoSubmit: boolean;
   /** Per-tab override: pane id picked in the widget's Settings. null/absent = auto-route. */
   targetPane?: string | null;
+  diagnostics?: DiagnosticsPayload | null;
 }
 
 export function isSendPayload(value: unknown): value is SendPayload {
@@ -71,7 +79,25 @@ export function formatPrompt(payload: SendPayload, screenshotPath: string | null
     lines.push("");
   });
 
+  const errors = stringList(payload.diagnostics?.errors);
+  if (errors.length > 0) {
+    lines.push("Recent console errors (oldest first):");
+    for (const entry of errors) lines.push(`- ${truncate(entry, 300)}`);
+    lines.push("");
+  }
+  const network = stringList(payload.diagnostics?.network);
+  if (network.length > 0) {
+    lines.push("Recent failed requests (oldest first):");
+    for (const entry of network) lines.push(`- ${truncate(entry, 300)}`);
+    lines.push("");
+  }
+
   return lines.join("\n").trimEnd();
+}
+
+/** The payload crosses the network — trust nothing beyond isSendPayload's check. */
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
 function formatStyles(styles: Record<string, string>): string {

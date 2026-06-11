@@ -7,6 +7,7 @@
 import { domToPng } from "modern-screenshot";
 
 import { buildElementPayload, type ElementPayload } from "./capture.ts";
+import { getDiagnostics, installDiagnostics } from "./diagnostics.ts";
 
 interface PickedItem {
   element: Element;
@@ -36,11 +37,16 @@ const ICON_GEAR =
 
 (function initWidget(): void {
   const ROOT_ID = "claude-tmux-bridge-root";
-  if (document.getElementById(ROOT_ID)) return;
 
   // Origin of the bridge that served this script — works on any port, no build-time define.
   const loader = document.currentScript as HTMLScriptElement | null;
   const BRIDGE_ORIGIN = loader?.src ? new URL(loader.src).origin : "http://localhost:7331";
+
+  // Hook console/fetch/error before the app code runs (extension injects at
+  // document_start), and before the double-injection guard below.
+  installDiagnostics(BRIDGE_ORIGIN);
+
+  if (document.getElementById(ROOT_ID)) return;
 
   const host = document.createElement("div");
   host.id = ROOT_ID;
@@ -503,6 +509,7 @@ const ICON_GEAR =
           screenshot,
           autoSubmit: autosend.checked,
           targetPane: prefs.targetPane,
+          diagnostics: getDiagnostics(),
         }),
       });
       const data = (await res.json()) as { ok: boolean; error?: string };
