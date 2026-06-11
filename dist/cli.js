@@ -119,6 +119,10 @@ function formatPrompt(payload, screenshotPath) {
       lines.push(`- Component path: ${el.componentStack.join(" \u203A ")}`);
     }
     lines.push(`- Selector: ${el.selector}`);
+    if (el.props && Object.keys(el.props).length > 0) {
+      const props = Object.entries(el.props).map(([k, v]) => `${k}=${v}`).join(", ");
+      lines.push(`- Props: ${truncate(props, 500)}`);
+    }
     if (el.source) lines.push(`- Source: ${el.source}`);
     if (el.role || el.accessibleName) {
       lines.push(`- Role/name: ${[el.role, el.accessibleName].filter(Boolean).join(" / ")}`);
@@ -133,7 +137,22 @@ function formatPrompt(payload, screenshotPath) {
     lines.push("```");
     lines.push("");
   });
+  const errors = stringList(payload.diagnostics?.errors);
+  if (errors.length > 0) {
+    lines.push("Recent console errors (oldest first):");
+    for (const entry of errors) lines.push(`- ${truncate(entry, 300)}`);
+    lines.push("");
+  }
+  const network = stringList(payload.diagnostics?.network);
+  if (network.length > 0) {
+    lines.push("Recent failed requests (oldest first):");
+    for (const entry of network) lines.push(`- ${truncate(entry, 300)}`);
+    lines.push("");
+  }
   return lines.join("\n").trimEnd();
+}
+function stringList(value) {
+  return Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
 }
 function formatStyles(styles) {
   return Object.entries(styles).map(([k, v]) => `${k}: ${v}`).join("; ");
@@ -267,6 +286,17 @@ function createServer(config) {
       }
       return;
     }
+    if (req.method === "GET" && pathname === "/pane-title") {
+      const id = searchParams.get("pane");
+      try {
+        const panes2 = await listPanes();
+        const pane = panes2.find((p) => p.id === id);
+        sendJson(res, 200, pane ? { ok: true, title: pane.title } : { ok: false });
+      } catch {
+        sendJson(res, 200, { ok: false });
+      }
+      return;
+    }
     if (req.method === "POST" && pathname === "/send") {
       await handleSend(req, res);
       return;
@@ -353,7 +383,7 @@ async function saveScreenshot(dataUrl) {
   if (!match?.[1]) return null;
   const dir = join(tmpdir(), "claude-tmux-bridge");
   await mkdir(dir, { recursive: true });
-  const file = join(dir, `shot-${Date.now()}.png`);
+  const file = join(dir, `shot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`);
   await writeFile(file, Buffer.from(match[1], "base64"));
   return file;
 }
@@ -392,6 +422,7 @@ import { homedir } from "os";
 import { join as join2, dirname as dirname2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 import { mkdir as mkdir2, writeFile as writeFile2, rm } from "fs/promises";
+import { existsSync as existsSync2 } from "fs";
 import { execFile as execFile2 } from "child_process";
 import { promisify as promisify2 } from "util";
 var execFileAsync2 = promisify2(execFile2);
@@ -400,6 +431,12 @@ var PLIST = join2(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
 var LOG_DIR = join2(homedir(), "Library", "Logs", "claude-tmux-bridge");
 function binPath() {
   return join2(dirname2(fileURLToPath2(import.meta.url)), "cli.js");
+}
+function nodePath() {
+  if (!process.execPath.includes("/fnm/node-versions/")) return process.execPath;
+  const fnmRoot = process.env.FNM_DIR ?? join2(homedir(), ".local", "share", "fnm");
+  const alias = join2(fnmRoot, "aliases", "default", "bin", "node");
+  return existsSync2(alias) ? alias : process.execPath;
 }
 function plistContent() {
   const path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -410,7 +447,7 @@ function plistContent() {
   <key>Label</key><string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${process.execPath}</string>
+    <string>${nodePath()}</string>
     <string>${binPath()}</string>
     <string>start</string>
   </array>
@@ -433,7 +470,15 @@ async function installService() {
   await writeFile2(PLIST, plistContent(), "utf8");
   await execFileAsync2("launchctl", ["bootout", `${domain()}/${LABEL}`]).catch(() => {
   });
-  await execFileAsync2("launchctl", ["bootstrap", domain(), PLIST]);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await execFileAsync2("launchctl", ["bootstrap", domain(), PLIST]);
+      break;
+    } catch (error) {
+      if (attempt >= 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
   return PLIST;
 }
 async function uninstallService() {
