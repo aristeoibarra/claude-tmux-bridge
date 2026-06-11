@@ -33,9 +33,10 @@ Imports use explicit `.ts` extensions (`allowImportingTsExtensions` + Bundler re
 
 ## Request flow (the core path)
 
-1. Browser widget (`client/widget.ts`) captures one or more elements via `client/capture.ts`, optionally rasterizes the largest with `modern-screenshot`, and `POST`s `{message, url, elements, screenshot, autoSubmit}` to `/send`.
+1. Browser widget (`client/widget.ts`) captures one or more elements via `client/capture.ts` (component name/ancestry **and serialized props** from the fiber), optionally rasterizes a screenshot with `modern-screenshot` (largest element, or the viewport with the selection outlined), and `POST`s `{message, url, elements, screenshot, autoSubmit, targetPane, diagnostics}` to `/send`. `diagnostics` is a ring buffer of recent console errors / uncaught exceptions / failed fetches kept by `client/diagnostics.ts` (hooks installed at widget load; the extension injects at `document_start` so they run before app code).
 2. `src/server.ts` `resolveTarget()` picks the destination pane (cascade below), `formatPrompt()` (`src/format.ts`) renders the agent-facing prompt, and a base64 screenshot is written to a temp file so Claude can read it by path.
 3. `injectToPane()` (`src/tmux.ts`) loads the prompt into a named tmux buffer and `paste-buffer -p` (bracketed paste) into the pane, then optionally `send-keys Enter`. Bracketed paste is required so multi-line prompts stay one block instead of submitting per newline.
+4. After an auto-send the widget polls `GET /pane-title?pane=...` once: Claude Code mirrors its current task into the tmux pane title, which is the only "did Claude pick it up?" feedback channel.
 
 ## Routing cascade (`resolveTarget` in src/server.ts)
 
@@ -55,11 +56,11 @@ The design goal is **zero per-project config**, tolerant of ephemeral tmux pane 
 
 ## launchd service (src/service.ts)
 
-`service install` writes `~/Library/LaunchAgents/com.aristeoibarra.claude-tmux-bridge.plist` and `launchctl bootstrap`s it (boots out first to reload). The plist hardcodes a `PATH` (`/opt/homebrew/bin:...`) because launchd starts with a minimal PATH and the server shells out to `tmux`/`lsof`. `ProgramArguments` points at `dist/cli.js` (resolved from `import.meta.url` at runtime).
+`service install` writes `~/Library/LaunchAgents/com.aristeoibarra.claude-tmux-bridge.plist` and `launchctl bootstrap`s it (boots out first to reload). The plist hardcodes a `PATH` (`/opt/homebrew/bin:...`) because launchd starts with a minimal PATH and the server shells out to `tmux`/`lsof`. `ProgramArguments` points at `dist/cli.js` (resolved from `import.meta.url` at runtime). The node binary is resolved via `nodePath()`: under fnm it prefers the stable `aliases/default/bin/node` symlink over the versioned `process.execPath`, so a Node upgrade doesn't silently kill the service.
 
 ## React fiber walking (client/react-fiber.ts)
 
-Resolves the owning component name + ancestry by walking `__reactFiber$*`, mirroring React DevTools' name resolution (memo/forwardRef/lazy). React 19 removed `_debugSource`, so file:line is **not** available from the fiber — component identity is what lets the agent grep to the file. `FRAMEWORK_RE` is a **pattern** (not an exact list) that filters Next.js/App-Router internal wrappers, because Next renames them across versions; extend the pattern rather than hardcoding names. Exact `file:line` is only available if a project opts into a `data-source` Babel plugin (read in `capture.ts`).
+Resolves the owning component name + ancestry by walking `__reactFiber$*`, mirroring React DevTools' name resolution (memo/forwardRef/lazy). `getComponentProps` snapshots the owner's `memoizedProps` as flat strings (scalars verbatim; functions/objects/elements summarized, never deep-serialized — keep it that way, props can hold huge object graphs). React 19 removed `_debugSource`, so file:line is **not** available from the fiber — component identity is what lets the agent grep to the file. `FRAMEWORK_RE` is a **pattern** (not an exact list) that filters Next.js/App-Router internal wrappers, because Next renames them across versions; extend the pattern rather than hardcoding names. Exact `file:line` is only available if a project opts into a `data-source` Babel plugin (read in `capture.ts`).
 
 ## Widget delivery & config
 

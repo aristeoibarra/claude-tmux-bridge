@@ -1,6 +1,6 @@
 {
   "name": "@aristeoibarra/claude-tmux-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Select browser DOM elements and send them, with a change request, into a Claude Code session running in a tmux pane.",
   "type": "module",
   "bin": {

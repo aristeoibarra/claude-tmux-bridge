@@ -97,22 +97,30 @@ claude-tmux-bridge service uninstall
 1. Run your dev server (`npm run dev`)
 2. Open Claude Code in a **tmux pane inside that project's directory**
 3. Click the **◎ Select → Claude** bookmark
-4. **Alt+C** or the button → hover → click an element
+4. **Alt+C** (configurable in Settings) or the button → hover → click an element
 5. Refine with **↑ parent / ↓ child**, **+ add another** for multiple elements
 6. Type the change, **Send** — it routes to the right Claude pane automatically
 
-The panel shows **→ <project>** so you know where it will go before sending.
+The panel shows **→ <project>** so you know where it will go before sending. After an
+auto-send, the status line briefly shows what Claude is doing (read from the tmux pane
+title).
 
 ## What it captures
 
 Per element: **component name + ancestry** (`ProfileCard › ProfileGrid › AppShell`,
-walked from the React fiber, framework wrappers filtered out), a **clean selector**
-(`@medv/finder`, strips Tailwind noise), **computed styles**, role/accessible name,
-bounding box, text, and outer HTML. Optionally a **screenshot** (largest selected
-element) saved to a temp file and referenced by path so Claude can read the image.
+walked from the React fiber, framework wrappers filtered out), **serialized props**
+(scalars verbatim, functions/objects summarized — so Claude sees the data, not just the
+markup), a **clean selector** (`@medv/finder`, strips Tailwind noise), **computed
+styles**, role/accessible name, bounding box, text, and outer HTML.
 
-Toggles (remembered across reloads): **auto-send** (off = paste for review first) and
-**📷 screenshot**.
+Per send: recent **console errors / uncaught exceptions / failed fetches** (buffered
+from page load by the widget), and optionally a **screenshot** — either the largest
+selected element, or the **whole viewport with the selection outlined** — saved to a
+temp file and referenced by path so Claude can read the image.
+
+Settings (remembered per origin): **target session**, **auto-send** (off = paste for
+review first), **screenshot mode** (off / element / viewport), and the **selection
+shortcut**.
 
 ## Commands
 
