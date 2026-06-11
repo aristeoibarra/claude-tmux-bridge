@@ -4,6 +4,7 @@ export interface ElementPayload {
   id: string | null;
   component: string | null;
   componentStack: string[];
+  props?: Record<string, string> | null;
   source: string | null;
   role: string | null;
   accessibleName: string | null;
@@ -49,6 +50,12 @@ export function formatPrompt(payload: SendPayload, screenshotPath: string | null
       lines.push(`- Component path: ${el.componentStack.join(" › ")}`);
     }
     lines.push(`- Selector: ${el.selector}`);
+    if (el.props && Object.keys(el.props).length > 0) {
+      const props = Object.entries(el.props)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(", ");
+      lines.push(`- Props: ${truncate(props, 500)}`);
+    }
     if (el.source) lines.push(`- Source: ${el.source}`);
     if (el.role || el.accessibleName) {
       lines.push(`- Role/name: ${[el.role, el.accessibleName].filter(Boolean).join(" / ")}`);

@@ -1,6 +1,6 @@
 import { finder } from "@medv/finder";
 
-import { getComponentStack, getOwnerComponentName } from "./react-fiber.ts";
+import { getComponentProps, getComponentStack, getOwnerComponentName } from "./react-fiber.ts";
 
 export interface ElementPayload {
   selector: string;
@@ -8,6 +8,7 @@ export interface ElementPayload {
   id: string | null;
   component: string | null;
   componentStack: string[];
+  props: Record<string, string> | null;
   source: string | null;
   role: string | null;
   accessibleName: string | null;
@@ -85,6 +86,7 @@ export function buildElementPayload(el: Element): ElementPayload {
     id: el.id || null,
     component: getOwnerComponentName(el),
     componentStack: getComponentStack(el),
+    props: getComponentProps(el),
     source: sourceEl?.getAttribute("data-source") ?? null,
     role: el.getAttribute("role"),
     accessibleName: accessibleName(el),

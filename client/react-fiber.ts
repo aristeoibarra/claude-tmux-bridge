@@ -24,6 +24,7 @@ interface Fiber {
   tag: number;
   type: unknown;
   elementType: unknown;
+  memoizedProps: unknown;
   return: Fiber | null;
 }
 
@@ -122,6 +123,62 @@ export function getOwnerComponentName(node: Node): string | null {
     fiber = fiber.return;
   }
   return null;
+}
+
+/**
+ * Serializable snapshot of the owning component's props, so the agent sees the
+ * data the component received — not just its rendered output. Values are
+ * summarized, never deep-serialized: functions become "ƒ", objects a key list,
+ * React elements a marker. `children` is omitted (already covered by HTML).
+ */
+export function getComponentProps(node: Node, limit = 15): Record<string, string> | null {
+  let fiber = getFiberFromDom(node);
+  while (fiber) {
+    const name = getDisplayNameForFiber(fiber);
+    if (name && !isFramework(name)) break;
+    fiber = fiber.return;
+  }
+  const props = fiber?.memoizedProps;
+  if (typeof props !== "object" || props === null) return null;
+
+  const out: Record<string, string> = {};
+  let count = 0;
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "children") continue;
+    if (count >= limit) {
+      out["…"] = `+${Object.keys(props).length - 1 - count} more`;
+      break;
+    }
+    out[key] = describeValue(value);
+    count += 1;
+  }
+  return count > 0 ? out : null;
+}
+
+function describeValue(value: unknown): string {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  switch (typeof value) {
+    case "string":
+      return JSON.stringify(value.length > 120 ? `${value.slice(0, 120)}…` : value);
+    case "number":
+    case "boolean":
+    case "bigint":
+      return String(value);
+    case "function":
+      return "ƒ";
+    case "symbol":
+      return value.toString();
+    case "object": {
+      if (Array.isArray(value)) return `Array(${value.length})`;
+      const marker: unknown = Reflect.get(value, "$$typeof");
+      if (typeof marker === "symbol") return "<ReactElement>";
+      const keys = Object.keys(value);
+      return `{${keys.slice(0, 6).join(", ")}${keys.length > 6 ? ", …" : ""}}`;
+    }
+    default:
+      return String(value);
+  }
 }
 
 /** Component ancestry from nearest to outermost, capped and deduped of repeats. */
