@@ -1,8 +1,13 @@
 {
   "manifest_version": 3,
   "name": "claude-tmux-bridge",
-  "version": "0.2.0",
-  "description": "Auto-loads the claude-tmux-bridge widget on local dev apps (localhost).",
+  "version": "0.3.0",
+  "description": "Auto-loads the claude-tmux-bridge widget on local dev apps (localhost), and holds its settings.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "claude-tmux-bridge settings"
+  },
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
   "content_scripts": [
     {
       "matches": ["http://localhost/*", "http://127.0.0.1/*"],

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>claude-tmux-bridge</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    width: 320px; margin: 0; padding: 14px;
+    background: #1a1a1a; color: #f5f5f5;
+    font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
+  }
+  .hidden { display: none !important; }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  header .title { font-size: 13px; font-weight: 700; color: #f5b78f; }
+  header .health { font-size: 11px; color: #8a8a8a; }
+  header .health.ok { color: #6ee7a8; }
+  header .health.err { color: #ff8a8a; }
+
+  .scope { font-size: 11px; color: #777; margin-bottom: 14px; word-break: break-all; }
+
+  .field { margin-bottom: 14px; }
+  .field > label { display: block; font-size: 11px; color: #9a9a9a; margin-bottom: 6px; }
+  .field.off { opacity: .45; pointer-events: none; }
+
+  select {
+    width: 100%; border-radius: 10px; border: 1px solid #3a3a3a;
+    background: #0f0f0f; color: #f5f5f5; padding: 9px 10px; font-size: 13px; outline: none;
+  }
+  select:focus { border-color: #d97757; }
+
+  .refresh {
+    margin-top: 6px; border: none; background: none; color: #777;
+    font-size: 11px; cursor: pointer; padding: 0;
+  }
+  .refresh:hover { color: #aaa; }
+
+  .toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; font-size: 13px; color: #ddd; }
+  .toggle .hint { color: #777; font-size: 11px; margin-left: auto; }
+
+  button.hotkey {
+    width: 100%; text-align: left; border: 1px solid #3a3a3a; border-radius: 10px;
+    padding: 9px 12px; font-size: 12px; background: #0f0f0f; color: #f5f5f5; cursor: pointer;
+  }
+  button.hotkey:hover { border-color: #d97757; }
+  button.hotkey.recording { border-color: #d97757; color: #f5b78f; }
+
+  .note { font-size: 11px; color: #777; margin-top: 6px; line-height: 1.4; }
+  .note.err { color: #c98a8a; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="title">claude-tmux-bridge</span>
+    <span class="health" id="health">checking…</span>
+  </header>
+  <div class="scope" id="scope"></div>
+
+  <div class="field" id="pane-field">
+    <label for="session">Target session</label>
+    <select id="session"></select>
+    <button class="refresh" id="refresh">↻ Refresh sessions</button>
+    <div class="note hidden" id="pane-note"></div>
+  </div>
+
+  <div class="field">
+    <label>Defaults</label>
+    <label class="toggle">
+      <input type="checkbox" id="autosend"> auto-send
+      <span class="hint">off: paste only</span>
+    </label>
+  </div>
+
+  <div class="field">
+    <label for="diclang">Dictation language</label>
+    <select id="diclang">
+      <option value="auto">Auto (browser language)</option>
+      <option value="es-MX">Español (México)</option>
+      <option value="es-ES">Español (España)</option>
+      <option value="en-US">English (US)</option>
+      <option value="en-GB">English (UK)</option>
+      <option value="pt-BR">Português (Brasil)</option>
+      <option value="fr-FR">Français</option>
+      <option value="de-DE">Deutsch</option>
+    </select>
+    <div class="note" id="dicnote">Transcribed locally with whisper.cpp — audio never leaves this machine.</div>
+  </div>
+
+  <div class="field">
+    <label>Selection shortcut</label>
+    <button class="hotkey" id="hotkey"></button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

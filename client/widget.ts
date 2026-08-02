@@ -15,12 +15,6 @@ interface PickedItem {
   payload: ElementPayload;
 }
 
-interface SessionInfo {
-  id: string;
-  label: string;
-  path: string;
-}
-
 type ShotTarget = "element" | "viewport";
 
 interface Hotkey {
@@ -32,7 +26,21 @@ interface Hotkey {
   meta: boolean;
 }
 
+/** Must stay in sync with DEFAULT_HOTKEY in extension/popup.js. */
 const DEFAULT_HOTKEY: Hotkey = { code: "KeyC", alt: true, ctrl: false, shift: false, meta: false };
+
+/**
+ * Everything the extension popup owns arrives over postMessage (see
+ * `extension/content.js`); the panel's own toggles stay in localStorage, which
+ * is also the fallback when the widget is loaded without the extension.
+ */
+interface ExtensionPrefs {
+  autoSend?: boolean;
+  dictationLang?: string;
+  hotkey?: Hotkey | null;
+  targetPane?: string | null;
+  targetPaneLabel?: string | null;
+}
 
 interface Prefs {
   autoSend: boolean;
@@ -40,8 +48,10 @@ interface Prefs {
   shot: boolean;
   /** What the screenshot frames; remembered even while `shot` is off. */
   shotTarget: ShotTarget;
-  /** Pane id chosen in Settings, or null for auto-routing. Persisted per origin. */
+  /** Pane id pinned in the popup, or null for auto-routing. Set per origin. */
   targetPane: string | null;
+  /** Human label for the pinned pane, so the panel needn't refetch /sessions. */
+  targetPaneLabel: string | null;
   hotkey: Hotkey;
   /** BCP-47 tag for dictation, or "auto" to follow the browser. */
   dictationLang: string;
@@ -52,8 +62,6 @@ const ICON_AI =
   '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.2l1.7 5.4 5.4 1.7-5.4 1.7L12 16.4l-1.7-5.4L4.9 9.3l5.4-1.7z"/><path d="M18.6 13.6l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z"/></svg>';
 const ICON_CLOSE =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-const ICON_GEAR =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 const ICON_MIC =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v4"/></svg>';
 const ICON_STOP =
@@ -85,7 +93,7 @@ const ICON_STOP =
       /* Author rules such as .picked's display:flex outrank the UA's [hidden]. */
       [hidden] { display: none !important; }
 
-      /* Launcher: two always-visible buttons, no menu to open. */
+      /* Launcher: one button, one meaning. Settings live in the extension popup. */
       .fab {
         position: fixed; bottom: 16px; right: 16px; z-index: 2147483646;
         width: 52px; height: 52px; border-radius: 50%;
@@ -97,16 +105,6 @@ const ICON_STOP =
       .fab:hover { transform: scale(1.06); }
       .fab.armed { background: #1a1a1a; }
       .fab svg { width: 24px; height: 24px; display: block; }
-      .gear {
-        position: fixed; right: 27px; bottom: 78px; z-index: 2147483646;
-        width: 30px; height: 30px; border-radius: 50%;
-        background: #2a2a2a; color: #cfcfcf; border: 1px solid #3a3a3a; cursor: pointer;
-        display: flex; align-items: center; justify-content: center;
-        box-shadow: 0 3px 10px rgba(0,0,0,.3);
-        transition: background .12s, transform .12s, color .12s;
-      }
-      .gear:hover { background: #353535; color: #f5b78f; transform: scale(1.08); }
-      .gear svg { width: 16px; height: 16px; display: block; }
 
       .overlay {
         position: fixed; z-index: 2147483645; pointer-events: none;
@@ -114,13 +112,13 @@ const ICON_STOP =
         border-radius: 3px; display: none;
       }
 
-      .panel, .settings {
+      .panel {
         position: fixed; bottom: 16px; right: 16px; z-index: 2147483647;
         width: 360px; max-height: 80vh; overflow-y: auto;
         background: #1a1a1a; color: #f5f5f5; border-radius: 14px;
         padding: 16px; box-shadow: 0 10px 34px rgba(0,0,0,.45); display: none;
       }
-      .panel.open, .settings.open { display: block; }
+      .panel.open { display: block; }
 
       .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
       .head .title { font-size: 13px; font-weight: 700; color: #f5b78f; }
@@ -214,32 +212,8 @@ const ICON_STOP =
       .status { font-size: 12px; margin-top: 8px; min-height: 16px; }
       .status.ok { color: #6ee7a8; }
       .status.err { color: #ff8a8a; }
-
-      .field { margin-bottom: 14px; }
-      .field > label { display: block; font-size: 11px; color: #9a9a9a; margin-bottom: 6px; }
-      select {
-        width: 100%; border-radius: 10px; border: 1px solid #3a3a3a;
-        background: #0f0f0f; color: #f5f5f5; padding: 10px; font-size: 13px; outline: none;
-      }
-      select:focus { border-color: #d97757; }
-      .field .refresh {
-        margin-top: 6px; border: none; background: none; color: #777;
-        font-size: 11px; cursor: pointer; padding: 0;
-      }
-      .field .refresh:hover { color: #aaa; }
-      .field button.hotkey {
-        width: 100%; text-align: left; border: 1px solid #3a3a3a; border-radius: 10px;
-        padding: 9px 12px; font-size: 12px; background: #0f0f0f; color: #f5f5f5; cursor: pointer;
-      }
-      .field button.hotkey:hover { border-color: #d97757; }
-      .field button.hotkey.recording { border-color: #d97757; color: #f5b78f; }
-      .toggles { display: flex; flex-direction: column; gap: 12px; font-size: 13px; color: #ddd; }
-      .toggles label { display: flex; align-items: center; gap: 9px; cursor: pointer; }
-      .toggles .hint { color: #777; font-size: 11px; margin-left: auto; }
-      .field .note { font-size: 11px; color: #777; margin-top: 6px; line-height: 1.4; }
     </style>
 
-    <button class="gear" title="Settings"></button>
     <button class="fab" title="Select an element (Alt+C)"></button>
     <div class="overlay"></div>
 
@@ -280,53 +254,12 @@ const ICON_STOP =
       </div>
       <div class="status"></div>
     </div>
-
-    <div class="settings">
-      <div class="head">
-        <span class="title">Settings</span>
-        <button class="x close-settings" title="Close">✕</button>
-      </div>
-      <div class="field">
-        <label>Target session</label>
-        <select class="session"></select>
-        <button class="refresh">↻ Refresh sessions</button>
-      </div>
-      <div class="field">
-        <label>Defaults</label>
-        <div class="toggles">
-          <label title="Send immediately. Off = paste into Claude's prompt so you can review/edit before sending.">
-            <input type="checkbox" class="autosend"> auto-send
-            <span class="hint">off: paste only</span>
-          </label>
-        </div>
-      </div>
-      <div class="field dictation">
-        <label>Dictation language</label>
-        <select class="diclang">
-          <option value="auto">Auto (browser language)</option>
-          <option value="es-MX">Español (México)</option>
-          <option value="es-ES">Español (España)</option>
-          <option value="en-US">English (US)</option>
-          <option value="en-GB">English (UK)</option>
-          <option value="pt-BR">Português (Brasil)</option>
-          <option value="fr-FR">Français</option>
-          <option value="de-DE">Deutsch</option>
-        </select>
-        <div class="note">Transcribed locally with whisper.cpp — audio never leaves this machine.</div>
-      </div>
-      <div class="field">
-        <label>Selection shortcut</label>
-        <button class="hotkey"></button>
-      </div>
-    </div>
   `;
 
   const q = <T extends Element>(sel: string): T => shadow.querySelector(sel) as T;
   const fab = q<HTMLButtonElement>(".fab");
-  const gear = q<HTMLButtonElement>(".gear");
   const overlay = q<HTMLDivElement>(".overlay");
   const panel = q<HTMLDivElement>(".panel");
-  const settings = q<HTMLDivElement>(".settings");
   const chips = q<HTMLDivElement>(".chips");
   const pickedBox = q<HTMLDivElement>(".picked");
   const nameEl = q<HTMLDivElement>(".name");
@@ -334,21 +267,15 @@ const ICON_STOP =
   const textarea = q<HTMLTextAreaElement>("textarea");
   const micBtn = q<HTMLButtonElement>(".mic");
   const interimEl = q<HTMLDivElement>(".interim");
-  const autosend = q<HTMLInputElement>(".autosend");
   const shotCheck = q<HTMLInputElement>(".shot");
   const shotSeg = q<HTMLDivElement>(".seg");
   const shotElementBtn = q<HTMLButtonElement>(".shot-element");
   const shotViewportBtn = q<HTMLButtonElement>(".shot-viewport");
-  const dicLang = q<HTMLSelectElement>(".diclang");
-  const dictationLabel = q<HTMLLabelElement>(".field.dictation > label");
-  const dictationNote = q<HTMLDivElement>(".field.dictation .note");
-  const sessionSelect = q<HTMLSelectElement>(".session");
   const sendBtn = q<HTMLButtonElement>(".send");
   const status = q<HTMLDivElement>(".status");
   const dest = q<HTMLDivElement>(".dest");
 
   fab.innerHTML = ICON_AI;
-  gear.innerHTML = ICON_GEAR;
   micBtn.innerHTML = ICON_MIC;
 
   const PREFS_KEY = "ctb-prefs";
@@ -357,6 +284,7 @@ const ICON_STOP =
     shot: false,
     shotTarget: "element",
     targetPane: null,
+    targetPaneLabel: null,
     hotkey: { ...DEFAULT_HOTKEY },
     dictationLang: "auto",
   };
@@ -375,21 +303,13 @@ const ICON_STOP =
     }
     if (typeof saved.dictationLang === "string") prefs.dictationLang = saved.dictationLang;
     if (typeof saved.targetPane === "string") prefs.targetPane = saved.targetPane;
+    if (typeof saved.targetPaneLabel === "string") prefs.targetPaneLabel = saved.targetPaneLabel;
     if (typeof saved.hotkey === "object" && saved.hotkey !== null && typeof saved.hotkey.code === "string") {
-      prefs.hotkey = {
-        code: saved.hotkey.code,
-        alt: saved.hotkey.alt === true,
-        ctrl: saved.hotkey.ctrl === true,
-        shift: saved.hotkey.shift === true,
-        meta: saved.hotkey.meta === true,
-      };
+      prefs.hotkey = normalizeHotkey(saved.hotkey);
     }
   } catch {
     /* ignore */
   }
-  autosend.checked = prefs.autoSend;
-  dicLang.value = prefs.dictationLang;
-  if (dicLang.value !== prefs.dictationLang) dicLang.value = "auto"; // unknown saved tag
 
   function syncShotUi(): void {
     shotCheck.checked = prefs.shot;
@@ -409,6 +329,16 @@ const ICON_STOP =
     return parts.join("+");
   }
 
+  function normalizeHotkey(h: Hotkey): Hotkey {
+    return {
+      code: h.code,
+      alt: h.alt === true,
+      ctrl: h.ctrl === true,
+      shift: h.shift === true,
+      meta: h.meta === true,
+    };
+  }
+
   function matchesHotkey(e: KeyboardEvent, h: Hotkey): boolean {
     return (
       e.code === h.code &&
@@ -421,17 +351,6 @@ const ICON_STOP =
 
   const selectTitle = (): string => `Select an element (${hotkeyLabel(prefs.hotkey)})`;
 
-  let recordingHotkey = false;
-  const hotkeyBtn = q<HTMLButtonElement>(".hotkey");
-
-  function refreshHotkeyUi(): void {
-    hotkeyBtn.textContent = recordingHotkey
-      ? "press the new combo… (Esc cancels)"
-      : hotkeyLabel(prefs.hotkey);
-    hotkeyBtn.classList.toggle("recording", recordingHotkey);
-    fab.title = selectTitle();
-  }
-
   const savePrefs = (): void => {
     try {
       localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
@@ -440,40 +359,52 @@ const ICON_STOP =
     }
   };
 
-  let sessions: SessionInfo[] = [];
+  // ── Settings channel: the extension popup owns them, this widget only reads ──
+  // The popup writes to chrome.storage; extension/content.js relays it here.
+  // Without the extension (bookmarklet, React mount) nothing answers and the
+  // localStorage values loaded above stand.
+  const FROM_WIDGET = "ctb-widget";
+  const FROM_EXT = "ctb-ext";
 
-  async function loadSessions(): Promise<void> {
-    try {
-      const r = await fetch(`${BRIDGE_ORIGIN}/sessions`);
-      const d = (await r.json()) as { ok: boolean; sessions?: SessionInfo[] };
-      sessions = d.sessions ?? [];
-    } catch {
-      sessions = [];
-    }
-    renderSessionOptions();
+  const toExtension = (message: Record<string, unknown>): void => {
+    window.postMessage({ source: FROM_WIDGET, ...message }, location.origin);
+  };
+
+  function isExtensionPrefs(value: unknown): value is ExtensionPrefs {
+    return typeof value === "object" && value !== null;
   }
 
-  function renderSessionOptions(): void {
-    sessionSelect.replaceChildren();
-    const auto = document.createElement("option");
-    auto.value = "";
-    auto.textContent = "Auto (detect)";
-    sessionSelect.append(auto);
-    for (const s of sessions) {
-      const opt = document.createElement("option");
-      opt.value = s.id;
-      opt.textContent = s.label;
-      sessionSelect.append(opt);
+  function applyExtensionPrefs(incoming: ExtensionPrefs): void {
+    if (typeof incoming.autoSend === "boolean") prefs.autoSend = incoming.autoSend;
+    if (typeof incoming.dictationLang === "string") prefs.dictationLang = incoming.dictationLang;
+    if (incoming.hotkey && typeof incoming.hotkey.code === "string") {
+      prefs.hotkey = normalizeHotkey(incoming.hotkey);
     }
-    // Restore the saved choice; if its pane is gone, fall back to Auto visually.
-    sessionSelect.value = prefs.targetPane ?? "";
-    if (sessionSelect.value !== (prefs.targetPane ?? "")) sessionSelect.value = "";
+    if (typeof incoming.targetPane === "string" || incoming.targetPane === null) {
+      prefs.targetPane = incoming.targetPane;
+    }
+    if (typeof incoming.targetPaneLabel === "string" || incoming.targetPaneLabel === null) {
+      prefs.targetPaneLabel = incoming.targetPaneLabel;
+    }
+    savePrefs(); // keeps the fallback copy warm if the extension is later removed
+    fab.title = selectTitle();
+    if (panel.classList.contains("open")) void updateDest();
   }
+
+  window.addEventListener("message", (event: MessageEvent<unknown>) => {
+    if (event.source !== window) return;
+    if (typeof event.data !== "object" || event.data === null) return;
+    const message: Record<string, unknown> = { ...event.data };
+    if (message.source !== FROM_EXT || message.type !== "prefs") return;
+    if (isExtensionPrefs(message.prefs)) applyExtensionPrefs(message.prefs);
+  });
+
+  toExtension({ type: "prefs:get" });
 
   async function updateDest(): Promise<void> {
     if (prefs.targetPane) {
-      const s = sessions.find((x) => x.id === prefs.targetPane);
-      dest.textContent = `→ ${s ? s.label : `pane ${prefs.targetPane}`} (pinned)`;
+      const label = prefs.targetPaneLabel ?? `pane ${prefs.targetPane}`;
+      dest.textContent = `→ ${label} (pinned)`;
       dest.className = "dest pin";
       return;
     }
@@ -542,19 +473,21 @@ const ICON_STOP =
 
   /**
    * No getUserMedia (or no bridge-side whisper) — hide the mic rather than fail on
-   * click, but keep the Settings field so the reason is somewhere findable.
+   * click. Whether the mic works is page-local (the Permissions-Policy case is
+   * invisible to both the popup and the bridge), so report it up to the extension:
+   * that reason is what the popup shows under "Dictation language".
    */
-  function disableDictation(reason: string): void {
+  function reportDictation(available: boolean, reason: string): void {
+    toExtension({ type: "dictation", available, reason });
+    if (available) return;
     micBtn.classList.add("hidden");
-    dicLang.classList.add("hidden");
-    dictationLabel.textContent = "Dictation (unavailable)";
-    dictationNote.textContent = reason;
     textarea.placeholder = "Describe the change you want…";
+    console.info(`[claude-tmux-bridge] dictation off — ${reason}`);
   }
 
-  if (!dictation.supported) disableDictation("This browser cannot capture audio.");
+  if (!dictation.supported) reportDictation(false, "This browser cannot capture audio.");
   // The page's own header can veto the mic; no point offering a button that can't work.
-  else if (micBlockedByPagePolicy()) disableDictation(POLICY_MESSAGE);
+  else if (micBlockedByPagePolicy()) reportDictation(false, POLICY_MESSAGE);
 
   async function checkDictationBackend(): Promise<void> {
     if (!dictation.supported || micBlockedByPagePolicy()) return;
@@ -562,11 +495,15 @@ const ICON_STOP =
       const r = await fetch(`${BRIDGE_ORIGIN}/dictation`);
       const d = (await r.json()) as { available?: boolean; model?: string; error?: string };
       if (d.available) {
-        dictationNote.textContent = `Transcribed locally with whisper.cpp (${d.model ?? "model"}). Audio never leaves this machine.`;
+        reportDictation(
+          true,
+          `Transcribed locally with whisper.cpp (${d.model ?? "model"}). Audio never leaves this machine.`,
+        );
         return;
       }
       // A bridge from before dictation existed 404s here — say so instead of "not found".
-      disableDictation(
+      reportDictation(
+        false,
         d.error === "not found"
           ? "Bridge is out of date — restart it to enable dictation."
           : (d.error ?? "Dictation unavailable."),
@@ -589,23 +526,13 @@ const ICON_STOP =
     dictation.start(dictationLang());
   }
 
-  // ── State machine: idle ↔ selecting ↔ composing / settings ───────────────
+  // ── State machine: idle ↔ selecting ↔ composing ──────────────────────────
   let selecting = false;
   let focused: Element | null = null;
   const picked: PickedItem[] = [];
 
   const isOwn = (node: EventTarget | null): boolean =>
     node instanceof Node && host.contains(node);
-
-  function showLauncher(withGear: boolean): void {
-    fab.classList.remove("hidden");
-    gear.classList.toggle("hidden", !withGear);
-  }
-
-  function hideLauncher(): void {
-    fab.classList.add("hidden");
-    gear.classList.add("hidden");
-  }
 
   /** Return to the resting state: launcher visible, nothing selected/open. */
   function goIdle(): void {
@@ -615,9 +542,8 @@ const ICON_STOP =
     fab.classList.remove("armed");
     fab.title = selectTitle();
     panel.classList.remove("open");
-    settings.classList.remove("open");
     drawOverlay(null);
-    showLauncher(true);
+    fab.classList.remove("hidden");
   }
 
   function startSelect(): void {
@@ -626,22 +552,13 @@ const ICON_STOP =
     fab.classList.add("armed");
     fab.title = "Esc to cancel";
     panel.classList.remove("open");
-    settings.classList.remove("open");
-    showLauncher(false); // keep the FAB (now a cancel button), hide the gear
+    fab.classList.remove("hidden"); // it is the cancel button now
   }
 
   function openPanel(): void {
     selecting = false;
-    settings.classList.remove("open");
-    hideLauncher();
+    fab.classList.add("hidden");
     panel.classList.add("open");
-  }
-
-  function openSettings(): void {
-    panel.classList.remove("open");
-    hideLauncher();
-    settings.classList.add("open");
-    void loadSessions();
   }
 
   function drawOverlay(el: Element | null): void {
@@ -677,25 +594,6 @@ const ICON_STOP =
   }
 
   function onKey(e: KeyboardEvent): void {
-    if (recordingHotkey) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.key === "Escape") {
-        recordingHotkey = false;
-        refreshHotkeyUi();
-        return;
-      }
-      if (/^(?:Alt|Control|Shift|Meta)/.test(e.code)) return; // modifier alone — wait for the key
-      if (!e.altKey && !e.ctrlKey && !e.metaKey) {
-        hotkeyBtn.textContent = "add Alt, Ctrl or ⌘ to the key…";
-        return;
-      }
-      prefs.hotkey = { code: e.code, alt: e.altKey, ctrl: e.ctrlKey, shift: e.shiftKey, meta: e.metaKey };
-      savePrefs();
-      recordingHotkey = false;
-      refreshHotkeyUi();
-      return;
-    }
     if (e.key === "Escape") {
       // While recording, Esc means "stop and transcribe" — not "throw away the draft".
       if (dictation.state() === "recording") {
@@ -870,7 +768,7 @@ const ICON_STOP =
           url: location.href,
           elements,
           screenshot,
-          autoSubmit: autosend.checked,
+          autoSubmit: prefs.autoSend,
           targetPane: pinned,
           diagnostics: getDiagnostics(),
         }),
@@ -898,13 +796,14 @@ const ICON_STOP =
         // Pane ids never come back once gone — drop the dead pin instead of
         // silently re-routing on every send.
         prefs.targetPane = null;
+        prefs.targetPaneLabel = null;
         savePrefs();
-        void loadSessions();
+        toExtension({ type: "pin:clear" });
         notes.push("pinned session was gone, auto-routed");
       }
       const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
       const project = data.project ?? "Claude";
-      if (!autosend.checked) {
+      if (!prefs.autoSend) {
         setStatus(`Pasted into ${project} — review and press Enter${suffix}.`, "ok");
         window.setTimeout(goIdle, 2200);
         return;
@@ -953,18 +852,11 @@ const ICON_STOP =
   // ── Wiring ───────────────────────────────────────────────────────────────
   // FAB has exactly one meaning: select, or cancel while selecting.
   fab.addEventListener("click", () => (selecting ? goIdle() : startSelect()));
-  gear.addEventListener("click", openSettings);
   q<HTMLButtonElement>(".close-panel").addEventListener("click", goIdle);
-  q<HTMLButtonElement>(".close-settings").addEventListener("click", goIdle);
-  q<HTMLButtonElement>(".refresh").addEventListener("click", () => void loadSessions());
   q<HTMLButtonElement>(".parent").addEventListener("click", focusParent);
   q<HTMLButtonElement>(".child").addEventListener("click", focusChild);
   q<HTMLButtonElement>(".add").addEventListener("click", addAnother);
   sendBtn.addEventListener("click", () => void send());
-  autosend.addEventListener("change", () => {
-    prefs.autoSend = autosend.checked;
-    savePrefs();
-  });
   micBtn.addEventListener("click", toggleDictation);
   shotCheck.addEventListener("change", () => {
     prefs.shot = shotCheck.checked;
@@ -978,28 +870,14 @@ const ICON_STOP =
   };
   shotElementBtn.addEventListener("click", setShotTarget("element"));
   shotViewportBtn.addEventListener("click", setShotTarget("viewport"));
-  dicLang.addEventListener("change", () => {
-    prefs.dictationLang = dicLang.value;
-    savePrefs();
-  });
-  sessionSelect.addEventListener("change", () => {
-    prefs.targetPane = sessionSelect.value || null;
-    savePrefs();
-    if (panel.classList.contains("open")) void updateDest();
-  });
-  hotkeyBtn.addEventListener("click", () => {
-    recordingHotkey = !recordingHotkey;
-    refreshHotkeyUi();
-  });
   document.addEventListener("mousemove", onMove, true);
   document.addEventListener("click", onClick, true);
   document.addEventListener("keydown", onKey, true);
   window.addEventListener("scroll", () => focused && drawOverlay(focused), true);
 
-  refreshHotkeyUi();
-  void loadSessions();
+  fab.title = selectTitle();
   void checkDictationBackend();
   console.info(
-    `[claude-tmux-bridge] widget ready — ${hotkeyLabel(prefs.hotkey)} or the button to select an element.`,
+    `[claude-tmux-bridge] widget ready — ${hotkeyLabel(prefs.hotkey)} or the button to select an element. Settings live in the extension popup.`,
   );
 })();
