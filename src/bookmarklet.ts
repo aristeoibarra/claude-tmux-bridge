@@ -54,6 +54,11 @@ export function bookmarkletPage(port: number): string {
   <p><small>Routing is automatic: the bridge maps the dev-server port to its project
   directory and finds the matching Claude pane. No per-project setup needed.</small></p>
 
+  <p><small>Settings — target session, auto-send, dictation language, the selection
+  shortcut — live in the <strong>browser extension's toolbar popup</strong>
+  (<code>Load unpacked</code> the <code>extension/</code> folder). Loaded via the
+  bookmarklet alone, the widget runs on defaults.</small></p>
+
 <script>
   fetch('/health').then(r=>r.json()).then(d=>{
     document.getElementById('st').innerHTML = d.ok ? '<span class="ok">● connected</span>' : '';
