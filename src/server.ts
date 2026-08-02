@@ -9,6 +9,7 @@ import type { BridgeConfig } from "./config.ts";
 import { cwdForPort, detectClaudePanes, injectToPane, listPanes, type TmuxPane } from "./tmux.ts";
 import { formatPrompt, isSendPayload } from "./format.ts";
 import { bookmarkletPage } from "./bookmarklet.ts";
+import { dictationStatus, transcribeWav } from "./transcribe.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Pre-built widget: bundled next to dist/cli.js, or under ../dist in dev (tsx).
@@ -17,6 +18,8 @@ const WIDGET_CANDIDATES = [
   join(__dirname, "..", "dist", "widget.global.js"),
 ];
 const MAX_BODY_BYTES = 5_000_000;
+/** Dictation audio is 16-bit 16 kHz mono — ~32 KB/s, so this covers minutes of talking. */
+const MAX_AUDIO_BYTES = 40_000_000;
 
 interface Resolved {
   pane: string;
@@ -105,11 +108,46 @@ export function createServer(config: BridgeConfig) {
       }
       return;
     }
+    if (req.method === "GET" && pathname === "/dictation") {
+      // Lets the widget hide the mic instead of failing on click.
+      sendJson(res, 200, { ok: true, ...(await dictationStatus(config)) });
+      return;
+    }
     if (req.method === "POST" && pathname === "/send") {
       await handleSend(req, res);
       return;
     }
+    if (req.method === "POST" && pathname === "/transcribe") {
+      await handleTranscribe(req, res);
+      return;
+    }
     sendJson(res, 404, { ok: false, error: "not found" });
+  }
+
+  async function handleTranscribe(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readBody(req, MAX_AUDIO_BYTES));
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: errorMessage(error) });
+      return;
+    }
+    if (!isTranscribePayload(parsed)) {
+      sendJson(res, 400, { ok: false, error: "missing audio" });
+      return;
+    }
+    const wav = Buffer.from(parsed.audio, "base64");
+    if (wav.length < 4_000) {
+      // Under ~0.1s of audio: the mic was opened and closed, nothing was said.
+      sendJson(res, 200, { ok: true, text: "" });
+      return;
+    }
+    try {
+      const text = await transcribeWav(wav, parsed.language ?? "auto", config);
+      sendJson(res, 200, { ok: true, text });
+    } catch (error) {
+      sendJson(res, 200, { ok: false, error: errorMessage(error) });
+    }
   }
 
   async function handleSend(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -241,13 +279,22 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.end(JSON.stringify(payload));
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function isTranscribePayload(value: unknown): value is { audio: string; language?: string } {
+  if (typeof value !== "object" || value === null) return false;
+  const payload: Record<string, unknown> = { ...value };
+  return (
+    typeof payload.audio === "string" &&
+    (payload.language === undefined || typeof payload.language === "string")
+  );
+}
+
+function readBody(req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > limit) {
         reject(new Error("body too large"));
         req.destroy();
         return;

@@ -9,6 +9,10 @@ export interface BridgeConfig {
   projectPath: string | null;
   /** HTTP port the bridge listens on. */
   port: number;
+  /** Path to whisper.cpp's CLI. Null = look it up in PATH / the usual prefixes. */
+  whisperBin: string | null;
+  /** Path to a ggml model. Null = pick the best one found on disk. */
+  whisperModel: string | null;
 }
 
 export const DEFAULT_PORT = 7331;
@@ -20,6 +24,8 @@ const DEFAULT_CONFIG: BridgeConfig = {
   targetPane: null,
   projectPath: null,
   port: DEFAULT_PORT,
+  whisperBin: null,
+  whisperModel: null,
 };
 
 export async function loadConfig(): Promise<BridgeConfig> {
