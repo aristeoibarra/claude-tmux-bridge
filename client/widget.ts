@@ -7,6 +7,7 @@
 import { domToPng } from "modern-screenshot";
 
 import { buildElementPayload, type ElementPayload } from "./capture.ts";
+import { createDictation, micBlockedByPagePolicy, POLICY_MESSAGE } from "./dictation.ts";
 import { getDiagnostics, installDiagnostics } from "./diagnostics.ts";
 
 interface PickedItem {
@@ -20,7 +21,7 @@ interface SessionInfo {
   path: string;
 }
 
-type ShotMode = "off" | "element" | "viewport";
+type ShotTarget = "element" | "viewport";
 
 interface Hotkey {
   /** KeyboardEvent.code — layout-independent (Alt+C yields "ç" in e.key on macOS). */
@@ -35,10 +36,15 @@ const DEFAULT_HOTKEY: Hotkey = { code: "KeyC", alt: true, ctrl: false, shift: fa
 
 interface Prefs {
   autoSend: boolean;
-  shotMode: ShotMode;
+  /** Attach a screenshot to the next send — toggled from the panel itself. */
+  shot: boolean;
+  /** What the screenshot frames; remembered even while `shot` is off. */
+  shotTarget: ShotTarget;
   /** Pane id chosen in Settings, or null for auto-routing. Persisted per origin. */
   targetPane: string | null;
   hotkey: Hotkey;
+  /** BCP-47 tag for dictation, or "auto" to follow the browser. */
+  dictationLang: string;
 }
 
 // Inline SVGs (no external assets — the widget is a single bundle).
@@ -48,6 +54,10 @@ const ICON_CLOSE =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 const ICON_GEAR =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+const ICON_MIC =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v4"/></svg>';
+const ICON_STOP =
+  '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
 
 (function initWidget(): void {
   const ROOT_ID = "claude-tmux-bridge-root";
@@ -72,6 +82,8 @@ const ICON_GEAR =
       :host { all: initial; }
       * { box-sizing: border-box; font-family: ui-sans-serif, system-ui, sans-serif; }
       .hidden { display: none !important; }
+      /* Author rules such as .picked's display:flex outrank the UA's [hidden]. */
+      [hidden] { display: none !important; }
 
       /* Launcher: two always-visible buttons, no menu to open. */
       .fab {
@@ -141,12 +153,49 @@ const ICON_GEAR =
       }
       .picked .nav button:hover { background: #2a2a2a; color: #f5b78f; }
 
+      .compose { position: relative; }
       textarea {
         width: 100%; min-height: 76px; resize: vertical; border-radius: 10px;
         border: 1px solid #3a3a3a; background: #0f0f0f; color: #f5f5f5;
-        padding: 10px; font-size: 13px; outline: none;
+        padding: 10px 44px 10px 10px; font-size: 13px; outline: none;
       }
       textarea:focus { border-color: #d97757; }
+
+      /* Mic sits inside the composer: typing and dictating are the same field. */
+      .mic {
+        position: absolute; right: 9px; bottom: 11px;
+        width: 28px; height: 28px; border-radius: 50%;
+        border: 1px solid #3a3a3a; background: #1f1f1f; color: #b5b5b5;
+        display: flex; align-items: center; justify-content: center; cursor: pointer;
+        transition: background .12s, color .12s, border-color .12s;
+      }
+      .mic:hover { color: #f5b78f; border-color: #d97757; }
+      .mic svg { width: 15px; height: 15px; display: block; }
+      /* Ring grows with the live input level, so silence is visible as silence. */
+      .mic.on {
+        background: #d97757; border-color: #d97757; color: #fff;
+        box-shadow: 0 0 0 calc(2px + var(--level, 0) * 7px) rgba(217,119,87,.35);
+      }
+      .mic.busy {
+        border-color: #d97757; color: #f5b78f;
+        animation: mic-blink 1s ease-in-out infinite;
+      }
+      @keyframes mic-blink { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+      .interim { margin-top: 6px; font-size: 12px; color: #8a8a8a; font-style: italic; }
+
+      .opts {
+        display: flex; align-items: center; gap: 10px;
+        margin-top: 10px; font-size: 12px; color: #bbb;
+      }
+      .opts label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+      .seg { display: flex; border: 1px solid #3a3a3a; border-radius: 8px; overflow: hidden; }
+      .seg button {
+        border: none; background: transparent; color: #8a8a8a;
+        font-size: 11px; padding: 4px 9px; cursor: pointer;
+      }
+      .seg button:hover { color: #ddd; }
+      .seg button.on { background: #2f2f2f; color: #f5b78f; }
+      .seg.off { opacity: .4; pointer-events: none; }
 
       .row { display: flex; gap: 8px; margin-top: 10px; }
       .row .send { flex: 1; }
@@ -187,6 +236,7 @@ const ICON_GEAR =
       .toggles { display: flex; flex-direction: column; gap: 12px; font-size: 13px; color: #ddd; }
       .toggles label { display: flex; align-items: center; gap: 9px; cursor: pointer; }
       .toggles .hint { color: #777; font-size: 11px; margin-left: auto; }
+      .field .note { font-size: 11px; color: #777; margin-top: 6px; line-height: 1.4; }
     </style>
 
     <button class="gear" title="Settings"></button>
@@ -211,7 +261,20 @@ const ICON_GEAR =
           <button class="add" title="Keep this and pick another">+ add</button>
         </div>
       </div>
-      <textarea placeholder="Describe the change you want…"></textarea>
+      <div class="compose">
+        <textarea placeholder="Describe the change you want — type or dictate…"></textarea>
+        <button class="mic" title="Dictate"></button>
+      </div>
+      <div class="interim" hidden></div>
+      <div class="opts">
+        <label title="Attach a PNG to this send.">
+          <input type="checkbox" class="shot"> screenshot
+        </label>
+        <div class="seg">
+          <button class="shot-element" title="Tight crop of the selected element">element</button>
+          <button class="shot-viewport" title="Whole viewport, selection outlined">viewport</button>
+        </div>
+      </div>
       <div class="row">
         <button class="send">Send to Claude</button>
       </div>
@@ -237,13 +300,19 @@ const ICON_GEAR =
           </label>
         </div>
       </div>
-      <div class="field">
-        <label>Screenshot</label>
-        <select class="shotmode">
-          <option value="off">Off</option>
-          <option value="element">Selected element only</option>
-          <option value="viewport">Viewport, selection highlighted</option>
+      <div class="field dictation">
+        <label>Dictation language</label>
+        <select class="diclang">
+          <option value="auto">Auto (browser language)</option>
+          <option value="es-MX">Español (México)</option>
+          <option value="es-ES">Español (España)</option>
+          <option value="en-US">English (US)</option>
+          <option value="en-GB">English (UK)</option>
+          <option value="pt-BR">Português (Brasil)</option>
+          <option value="fr-FR">Français</option>
+          <option value="de-DE">Deutsch</option>
         </select>
+        <div class="note">Transcribed locally with whisper.cpp — audio never leaves this machine.</div>
       </div>
       <div class="field">
         <label>Selection shortcut</label>
@@ -263,8 +332,16 @@ const ICON_GEAR =
   const nameEl = q<HTMLDivElement>(".name");
   const metaEl = q<HTMLDivElement>(".meta");
   const textarea = q<HTMLTextAreaElement>("textarea");
+  const micBtn = q<HTMLButtonElement>(".mic");
+  const interimEl = q<HTMLDivElement>(".interim");
   const autosend = q<HTMLInputElement>(".autosend");
-  const shotMode = q<HTMLSelectElement>(".shotmode");
+  const shotCheck = q<HTMLInputElement>(".shot");
+  const shotSeg = q<HTMLDivElement>(".seg");
+  const shotElementBtn = q<HTMLButtonElement>(".shot-element");
+  const shotViewportBtn = q<HTMLButtonElement>(".shot-viewport");
+  const dicLang = q<HTMLSelectElement>(".diclang");
+  const dictationLabel = q<HTMLLabelElement>(".field.dictation > label");
+  const dictationNote = q<HTMLDivElement>(".field.dictation .note");
   const sessionSelect = q<HTMLSelectElement>(".session");
   const sendBtn = q<HTMLButtonElement>(".send");
   const status = q<HTMLDivElement>(".status");
@@ -272,23 +349,31 @@ const ICON_GEAR =
 
   fab.innerHTML = ICON_AI;
   gear.innerHTML = ICON_GEAR;
+  micBtn.innerHTML = ICON_MIC;
 
   const PREFS_KEY = "ctb-prefs";
   const prefs: Prefs = {
     autoSend: true,
-    shotMode: "off",
+    shot: false,
+    shotTarget: "element",
     targetPane: null,
     hotkey: { ...DEFAULT_HOTKEY },
+    dictationLang: "auto",
   };
   try {
     const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs> & {
-      shot?: boolean; // pre-shotMode prefs shape
+      shotMode?: string; // superseded by shot + shotTarget
     };
     if (typeof saved.autoSend === "boolean") prefs.autoSend = saved.autoSend;
-    if (typeof saved.shot === "boolean") prefs.shotMode = saved.shot ? "element" : "off";
-    if (saved.shotMode === "off" || saved.shotMode === "element" || saved.shotMode === "viewport") {
-      prefs.shotMode = saved.shotMode;
+    if (typeof saved.shot === "boolean") prefs.shot = saved.shot;
+    if (saved.shotTarget === "element" || saved.shotTarget === "viewport") {
+      prefs.shotTarget = saved.shotTarget;
     }
+    if (saved.shotMode === "off" || saved.shotMode === "element" || saved.shotMode === "viewport") {
+      prefs.shot = saved.shotMode !== "off";
+      if (saved.shotMode !== "off") prefs.shotTarget = saved.shotMode;
+    }
+    if (typeof saved.dictationLang === "string") prefs.dictationLang = saved.dictationLang;
     if (typeof saved.targetPane === "string") prefs.targetPane = saved.targetPane;
     if (typeof saved.hotkey === "object" && saved.hotkey !== null && typeof saved.hotkey.code === "string") {
       prefs.hotkey = {
@@ -303,7 +388,16 @@ const ICON_GEAR =
     /* ignore */
   }
   autosend.checked = prefs.autoSend;
-  shotMode.value = prefs.shotMode;
+  dicLang.value = prefs.dictationLang;
+  if (dicLang.value !== prefs.dictationLang) dicLang.value = "auto"; // unknown saved tag
+
+  function syncShotUi(): void {
+    shotCheck.checked = prefs.shot;
+    shotSeg.classList.toggle("off", !prefs.shot);
+    shotElementBtn.classList.toggle("on", prefs.shotTarget === "element");
+    shotViewportBtn.classList.toggle("on", prefs.shotTarget === "viewport");
+  }
+  syncShotUi();
 
   function hotkeyLabel(h: Hotkey): string {
     const parts: string[] = [];
@@ -396,6 +490,105 @@ const ICON_GEAR =
     }
   }
 
+  // ── Dictation: same composer, voice instead of keyboard ──────────────────
+  function appendDictated(chunk: string): void {
+    const text = chunk.trim();
+    if (!text) return;
+    const current = textarea.value;
+    const sep = current === "" || /\s$/.test(current) ? "" : " ";
+    textarea.value = `${current}${sep}${text}`;
+    textarea.scrollTop = textarea.scrollHeight;
+  }
+
+  let recordingSince = 0;
+  let recordingTimer = 0;
+
+  function recordingTick(): void {
+    const seconds = Math.floor((Date.now() - recordingSince) / 1000);
+    const mmss = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+    interimEl.textContent = `● recording ${mmss} — click the mic or press Esc to transcribe`;
+  }
+
+  const dictation = createDictation(BRIDGE_ORIGIN, {
+    onState(state) {
+      const recording = state === "recording";
+      micBtn.classList.toggle("on", recording);
+      micBtn.classList.toggle("busy", state === "transcribing");
+      micBtn.innerHTML = recording ? ICON_STOP : ICON_MIC;
+      micBtn.title = recording ? "Stop and transcribe (Esc)" : "Dictate";
+      window.clearInterval(recordingTimer);
+      interimEl.hidden = state === "idle";
+      if (recording) {
+        recordingSince = Date.now();
+        recordingTick();
+        recordingTimer = window.setInterval(recordingTick, 1000);
+      } else if (state === "transcribing") {
+        interimEl.textContent = "transcribing locally…";
+      } else {
+        micBtn.style.removeProperty("--level");
+      }
+    },
+    onLevel(level) {
+      micBtn.style.setProperty("--level", level.toFixed(2));
+    },
+    onText(text) {
+      appendDictated(text);
+      textarea.focus();
+    },
+    onError(message) {
+      setStatus(message, "err");
+    },
+  });
+
+  /**
+   * No getUserMedia (or no bridge-side whisper) — hide the mic rather than fail on
+   * click, but keep the Settings field so the reason is somewhere findable.
+   */
+  function disableDictation(reason: string): void {
+    micBtn.classList.add("hidden");
+    dicLang.classList.add("hidden");
+    dictationLabel.textContent = "Dictation (unavailable)";
+    dictationNote.textContent = reason;
+    textarea.placeholder = "Describe the change you want…";
+  }
+
+  if (!dictation.supported) disableDictation("This browser cannot capture audio.");
+  // The page's own header can veto the mic; no point offering a button that can't work.
+  else if (micBlockedByPagePolicy()) disableDictation(POLICY_MESSAGE);
+
+  async function checkDictationBackend(): Promise<void> {
+    if (!dictation.supported || micBlockedByPagePolicy()) return;
+    try {
+      const r = await fetch(`${BRIDGE_ORIGIN}/dictation`);
+      const d = (await r.json()) as { available?: boolean; model?: string; error?: string };
+      if (d.available) {
+        dictationNote.textContent = `Transcribed locally with whisper.cpp (${d.model ?? "model"}). Audio never leaves this machine.`;
+        return;
+      }
+      // A bridge from before dictation existed 404s here — say so instead of "not found".
+      disableDictation(
+        d.error === "not found"
+          ? "Bridge is out of date — restart it to enable dictation."
+          : (d.error ?? "Dictation unavailable."),
+      );
+    } catch {
+      /* bridge hiccup — keep the mic, the error will surface on use */
+    }
+  }
+
+  const dictationLang = (): string =>
+    prefs.dictationLang === "auto" ? navigator.language || "auto" : prefs.dictationLang;
+
+  function toggleDictation(): void {
+    if (dictation.state() === "recording") {
+      dictation.stop();
+      return;
+    }
+    if (dictation.state() === "transcribing") return;
+    setStatus("", "");
+    dictation.start(dictationLang());
+  }
+
   // ── State machine: idle ↔ selecting ↔ composing / settings ───────────────
   let selecting = false;
   let focused: Element | null = null;
@@ -416,6 +609,7 @@ const ICON_GEAR =
 
   /** Return to the resting state: launcher visible, nothing selected/open. */
   function goIdle(): void {
+    dictation.cancel(); // never leave the mic open behind a closed panel
     selecting = false;
     fab.innerHTML = ICON_AI;
     fab.classList.remove("armed");
@@ -503,6 +697,12 @@ const ICON_GEAR =
       return;
     }
     if (e.key === "Escape") {
+      // While recording, Esc means "stop and transcribe" — not "throw away the draft".
+      if (dictation.state() === "recording") {
+        e.preventDefault();
+        dictation.stop();
+        return;
+      }
       goIdle();
       return;
     }
@@ -620,6 +820,16 @@ const ICON_GEAR =
   }
 
   async function send(): Promise<void> {
+    // Sending mid-dictation would drop what you just said — finish the round trip first.
+    if (dictation.state() === "recording") {
+      dictation.stop();
+      setStatus("Transcribing — press Send again when the text lands.", "");
+      return;
+    }
+    if (dictation.state() === "transcribing") {
+      setStatus("Still transcribing…", "");
+      return;
+    }
     const elements = [...picked.map((p) => p.payload)];
     if (focused) elements.push(buildElementPayload(focused));
     if (elements.length === 0) {
@@ -638,10 +848,10 @@ const ICON_GEAR =
     let screenshot: string | null = null;
     let shotFailed = false;
     const shotTargets = [...picked.map((p) => p.element), ...(focused ? [focused] : [])];
-    if (prefs.shotMode !== "off") {
+    if (prefs.shot) {
       try {
         screenshot =
-          prefs.shotMode === "viewport"
+          prefs.shotTarget === "viewport"
             ? await captureViewport(shotTargets)
             : await captureElement(shotTargets);
       } catch {
@@ -755,9 +965,21 @@ const ICON_GEAR =
     prefs.autoSend = autosend.checked;
     savePrefs();
   });
-  shotMode.addEventListener("change", () => {
-    const value = shotMode.value;
-    prefs.shotMode = value === "element" || value === "viewport" ? value : "off";
+  micBtn.addEventListener("click", toggleDictation);
+  shotCheck.addEventListener("change", () => {
+    prefs.shot = shotCheck.checked;
+    savePrefs();
+    syncShotUi();
+  });
+  const setShotTarget = (target: ShotTarget) => () => {
+    prefs.shotTarget = target;
+    savePrefs();
+    syncShotUi();
+  };
+  shotElementBtn.addEventListener("click", setShotTarget("element"));
+  shotViewportBtn.addEventListener("click", setShotTarget("viewport"));
+  dicLang.addEventListener("change", () => {
+    prefs.dictationLang = dicLang.value;
     savePrefs();
   });
   sessionSelect.addEventListener("change", () => {
@@ -776,6 +998,7 @@ const ICON_GEAR =
 
   refreshHotkeyUi();
   void loadSessions();
+  void checkDictationBackend();
   console.info(
     `[claude-tmux-bridge] widget ready — ${hotkeyLabel(prefs.hotkey)} or the button to select an element.`,
   );
