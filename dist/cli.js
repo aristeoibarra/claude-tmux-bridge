@@ -3,10 +3,10 @@
 // src/server.ts
 import { createServer as createHttpServer } from "http";
 import { fileURLToPath } from "url";
-import { dirname, join, basename } from "path";
-import { mkdir, writeFile, readFile } from "fs/promises";
-import { existsSync } from "fs";
-import { tmpdir } from "os";
+import { dirname, join as join2, basename } from "path";
+import { mkdir as mkdir2, writeFile as writeFile2, readFile } from "fs/promises";
+import { existsSync as existsSync2 } from "fs";
+import { tmpdir as tmpdir2 } from "os";
 
 // src/tmux.ts
 import { execFile } from "child_process";
@@ -216,18 +216,136 @@ function bookmarkletPage(port) {
 </html>`;
 }
 
+// src/transcribe.ts
+import { execFile as execFile2 } from "child_process";
+import { existsSync } from "fs";
+import { mkdir, readdir, rm, writeFile } from "fs/promises";
+import { cpus, homedir, tmpdir } from "os";
+import { join } from "path";
+import { promisify as promisify2 } from "util";
+var run = promisify2(execFile2);
+var BIN_NAMES = ["whisper-cli", "whisper-cpp"];
+var BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", join(homedir(), ".local", "bin")];
+var MODEL_DIRS = [
+  join(homedir(), ".local", "share", "whisper-cpp"),
+  join(homedir(), ".cache", "whisper-cpp"),
+  join(homedir(), "Library", "Application Support", "whisper-cpp"),
+  "/opt/homebrew/share/whisper-cpp",
+  "/usr/local/share/whisper-cpp",
+  "/usr/share/whisper-cpp"
+];
+var MODEL_PREFERENCE = ["small", "medium", "large", "base", "tiny"];
+var TIMEOUT_MS = 12e4;
+var cached = null;
+async function which(name) {
+  try {
+    const { stdout } = await run("/usr/bin/which", [name]);
+    const path = stdout.trim();
+    return path === "" ? null : path;
+  } catch {
+    return null;
+  }
+}
+async function findBin(config) {
+  if (config.whisperBin) return existsSync(config.whisperBin) ? config.whisperBin : null;
+  for (const name of BIN_NAMES) {
+    const found = await which(name);
+    if (found) return found;
+    const direct = BIN_DIRS.map((dir) => join(dir, name)).find((p) => existsSync(p));
+    if (direct) return direct;
+  }
+  return null;
+}
+function modelRank(file) {
+  if (!file.startsWith("ggml-") || !file.endsWith(".bin")) return -1;
+  if (file.startsWith("for-tests-")) return -1;
+  if (file.includes(".en.")) return -1;
+  const index = MODEL_PREFERENCE.findIndex((size) => file.includes(size));
+  return index === -1 ? -1 : MODEL_PREFERENCE.length - index;
+}
+async function findModel(config) {
+  if (config.whisperModel) return existsSync(config.whisperModel) ? config.whisperModel : null;
+  let best = null;
+  for (const dir of MODEL_DIRS) {
+    let files;
+    try {
+      files = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      const rank = modelRank(file);
+      if (rank < 0) continue;
+      if (!best || rank > best.rank) best = { path: join(dir, file), rank };
+    }
+  }
+  return best?.path ?? null;
+}
+async function resolveSetup(config) {
+  if (cached) return cached;
+  const bin = await findBin(config);
+  if (!bin) {
+    throw new Error(
+      "whisper.cpp not found \u2014 install it with `brew install whisper-cpp`, or set whisperBin in the bridge config."
+    );
+  }
+  const model = await findModel(config);
+  if (!model) {
+    throw new Error(
+      `No whisper model found. Download one (e.g. ggml-small.bin) into ~/.local/share/whisper-cpp, or set whisperModel in the bridge config.`
+    );
+  }
+  cached = { bin, model };
+  return cached;
+}
+async function dictationStatus(config) {
+  try {
+    const setup = await resolveSetup(config);
+    return { available: true, model: setup.model.split("/").pop() ?? setup.model };
+  } catch (error) {
+    return { available: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+function whisperLang(tag) {
+  if (tag === "" || tag === "auto") return "auto";
+  const base = tag.split("-")[0]?.toLowerCase() ?? "auto";
+  return /^[a-z]{2}$/.test(base) ? base : "auto";
+}
+function cleanTranscript(stdout) {
+  return stdout.split("\n").map((line) => line.trim()).filter((line) => line !== "" && !/^[[(][^\])]*[\])]$/.test(line)).join(" ").replace(/\s+/g, " ").trim();
+}
+async function transcribeWav(wav, language, config) {
+  const setup = await resolveSetup(config);
+  const dir = join(tmpdir(), "claude-tmux-bridge");
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `dictation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`);
+  await writeFile(file, wav);
+  const threads = Math.max(2, Math.min(8, cpus().length - 2));
+  try {
+    const { stdout } = await run(
+      setup.bin,
+      ["-m", setup.model, "-f", file, "-nt", "-np", "-l", whisperLang(language), "-t", String(threads)],
+      { timeout: TIMEOUT_MS, maxBuffer: 4e6 }
+    );
+    return cleanTranscript(stdout);
+  } finally {
+    await rm(file, { force: true });
+  }
+}
+
 // src/server.ts
 var __dirname = dirname(fileURLToPath(import.meta.url));
 var WIDGET_CANDIDATES = [
-  join(__dirname, "widget.global.js"),
-  join(__dirname, "..", "dist", "widget.global.js")
+  join2(__dirname, "widget.global.js"),
+  join2(__dirname, "..", "dist", "widget.global.js")
 ];
 var MAX_BODY_BYTES = 5e6;
+var MAX_AUDIO_BYTES = 4e7;
 function createServer(config) {
   let widgetCache = null;
   async function loadWidget() {
     if (widgetCache) return widgetCache;
-    const file = WIDGET_CANDIDATES.find((p) => existsSync(p));
+    const file = WIDGET_CANDIDATES.find((p) => existsSync2(p));
     if (!file) throw new Error("widget.global.js not found \u2014 run `npm run build`");
     widgetCache = await readFile(file, "utf8");
     return widgetCache;
@@ -297,11 +415,43 @@ function createServer(config) {
       }
       return;
     }
+    if (req.method === "GET" && pathname === "/dictation") {
+      sendJson(res, 200, { ok: true, ...await dictationStatus(config) });
+      return;
+    }
     if (req.method === "POST" && pathname === "/send") {
       await handleSend(req, res);
       return;
     }
+    if (req.method === "POST" && pathname === "/transcribe") {
+      await handleTranscribe(req, res);
+      return;
+    }
     sendJson(res, 404, { ok: false, error: "not found" });
+  }
+  async function handleTranscribe(req, res) {
+    let parsed;
+    try {
+      parsed = JSON.parse(await readBody(req, MAX_AUDIO_BYTES));
+    } catch (error) {
+      sendJson(res, 400, { ok: false, error: errorMessage(error) });
+      return;
+    }
+    if (!isTranscribePayload(parsed)) {
+      sendJson(res, 400, { ok: false, error: "missing audio" });
+      return;
+    }
+    const wav = Buffer.from(parsed.audio, "base64");
+    if (wav.length < 4e3) {
+      sendJson(res, 200, { ok: true, text: "" });
+      return;
+    }
+    try {
+      const text = await transcribeWav(wav, parsed.language ?? "auto", config);
+      sendJson(res, 200, { ok: true, text });
+    } catch (error) {
+      sendJson(res, 200, { ok: false, error: errorMessage(error) });
+    }
   }
   async function handleSend(req, res) {
     const body = await readBody(req);
@@ -381,10 +531,10 @@ function safePort(raw) {
 async function saveScreenshot(dataUrl) {
   const match = /^data:image\/(?:png|jpeg);base64,(.+)$/s.exec(dataUrl);
   if (!match?.[1]) return null;
-  const dir = join(tmpdir(), "claude-tmux-bridge");
-  await mkdir(dir, { recursive: true });
-  const file = join(dir, `shot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`);
-  await writeFile(file, Buffer.from(match[1], "base64"));
+  const dir = join2(tmpdir2(), "claude-tmux-bridge");
+  await mkdir2(dir, { recursive: true });
+  const file = join2(dir, `shot-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`);
+  await writeFile2(file, Buffer.from(match[1], "base64"));
   return file;
 }
 function setCors(res) {
@@ -396,13 +546,18 @@ function sendJson(res, status, payload) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
 }
-function readBody(req) {
+function isTranscribePayload(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const payload = { ...value };
+  return typeof payload.audio === "string" && (payload.language === void 0 || typeof payload.language === "string");
+}
+function readBody(req, limit = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
     req.on("data", (chunk) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > limit) {
         reject(new Error("body too large"));
         req.destroy();
         return;
@@ -418,25 +573,25 @@ function errorMessage(error) {
 }
 
 // src/service.ts
-import { homedir } from "os";
-import { join as join2, dirname as dirname2 } from "path";
+import { homedir as homedir2 } from "os";
+import { join as join3, dirname as dirname2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
-import { mkdir as mkdir2, writeFile as writeFile2, rm } from "fs/promises";
-import { existsSync as existsSync2 } from "fs";
-import { execFile as execFile2 } from "child_process";
-import { promisify as promisify2 } from "util";
-var execFileAsync2 = promisify2(execFile2);
+import { mkdir as mkdir3, writeFile as writeFile3, rm as rm2 } from "fs/promises";
+import { existsSync as existsSync3 } from "fs";
+import { execFile as execFile3 } from "child_process";
+import { promisify as promisify3 } from "util";
+var execFileAsync2 = promisify3(execFile3);
 var LABEL = "com.aristeoibarra.claude-tmux-bridge";
-var PLIST = join2(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
-var LOG_DIR = join2(homedir(), "Library", "Logs", "claude-tmux-bridge");
+var PLIST = join3(homedir2(), "Library", "LaunchAgents", `${LABEL}.plist`);
+var LOG_DIR = join3(homedir2(), "Library", "Logs", "claude-tmux-bridge");
 function binPath() {
-  return join2(dirname2(fileURLToPath2(import.meta.url)), "cli.js");
+  return join3(dirname2(fileURLToPath2(import.meta.url)), "cli.js");
 }
 function nodePath() {
   if (!process.execPath.includes("/fnm/node-versions/")) return process.execPath;
-  const fnmRoot = process.env.FNM_DIR ?? join2(homedir(), ".local", "share", "fnm");
-  const alias = join2(fnmRoot, "aliases", "default", "bin", "node");
-  return existsSync2(alias) ? alias : process.execPath;
+  const fnmRoot = process.env.FNM_DIR ?? join3(homedir2(), ".local", "share", "fnm");
+  const alias = join3(fnmRoot, "aliases", "default", "bin", "node");
+  return existsSync3(alias) ? alias : process.execPath;
 }
 function plistContent() {
   const path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
@@ -453,8 +608,8 @@ function plistContent() {
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${join2(LOG_DIR, "bridge.log")}</string>
-  <key>StandardErrorPath</key><string>${join2(LOG_DIR, "bridge.err.log")}</string>
+  <key>StandardOutPath</key><string>${join3(LOG_DIR, "bridge.log")}</string>
+  <key>StandardErrorPath</key><string>${join3(LOG_DIR, "bridge.err.log")}</string>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>${path}</string></dict>
 </dict>
@@ -465,9 +620,9 @@ function domain() {
   return `gui/${process.getuid?.() ?? ""}`;
 }
 async function installService() {
-  await mkdir2(dirname2(PLIST), { recursive: true });
-  await mkdir2(LOG_DIR, { recursive: true });
-  await writeFile2(PLIST, plistContent(), "utf8");
+  await mkdir3(dirname2(PLIST), { recursive: true });
+  await mkdir3(LOG_DIR, { recursive: true });
+  await writeFile3(PLIST, plistContent(), "utf8");
   await execFileAsync2("launchctl", ["bootout", `${domain()}/${LABEL}`]).catch(() => {
   });
   for (let attempt = 0; ; attempt += 1) {
@@ -484,7 +639,7 @@ async function installService() {
 async function uninstallService() {
   await execFileAsync2("launchctl", ["bootout", `${domain()}/${LABEL}`]).catch(() => {
   });
-  await rm(PLIST, { force: true });
+  await rm2(PLIST, { force: true });
 }
 async function serviceStatus() {
   try {
@@ -498,16 +653,18 @@ async function serviceStatus() {
 }
 
 // src/config.ts
-import { homedir as homedir2 } from "os";
-import { join as join3 } from "path";
-import { mkdir as mkdir3, readFile as readFile2, writeFile as writeFile3 } from "fs/promises";
+import { homedir as homedir3 } from "os";
+import { join as join4 } from "path";
+import { mkdir as mkdir4, readFile as readFile2, writeFile as writeFile4 } from "fs/promises";
 var DEFAULT_PORT = 7331;
-var CONFIG_DIR = join3(homedir2(), ".config", "claude-tmux-bridge");
-var CONFIG_FILE = join3(CONFIG_DIR, "config.json");
+var CONFIG_DIR = join4(homedir3(), ".config", "claude-tmux-bridge");
+var CONFIG_FILE = join4(CONFIG_DIR, "config.json");
 var DEFAULT_CONFIG = {
   targetPane: null,
   projectPath: null,
-  port: DEFAULT_PORT
+  port: DEFAULT_PORT,
+  whisperBin: null,
+  whisperModel: null
 };
 async function loadConfig() {
   try {
@@ -519,8 +676,8 @@ async function loadConfig() {
   }
 }
 async function saveConfig(config) {
-  await mkdir3(CONFIG_DIR, { recursive: true });
-  await writeFile3(CONFIG_FILE, `${JSON.stringify(config, null, 2)}
+  await mkdir4(CONFIG_DIR, { recursive: true });
+  await writeFile4(CONFIG_FILE, `${JSON.stringify(config, null, 2)}
 `, "utf8");
 }
 
