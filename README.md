@@ -32,6 +32,7 @@ project → the only Claude pane. It never hard-fails on a stale pane id.
 - tmux — your Claude Code sessions run inside tmux panes
 - Node 20+
 - `lsof` (preinstalled on macOS)
+- optional: `whisper-cpp` + a ggml model, for local dictation ([details](#dictation-local-no-cloud))
 
 ## Install
 
@@ -99,7 +100,9 @@ claude-tmux-bridge service uninstall
 3. Click the **◎ Select → Claude** bookmark
 4. **Alt+C** (configurable in Settings) or the button → hover → click an element
 5. Refine with **↑ parent / ↓ child**, **+ add another** for multiple elements
-6. Type the change, **Send** — it routes to the right Claude pane automatically
+6. Type the change — or press the **🎙 mic** in the composer and dictate it
+7. Tick **screenshot** (element / viewport) if the change is visual
+8. **Send** — it routes to the right Claude pane automatically
 
 The panel shows **→ <project>** so you know where it will go before sending. After an
 auto-send, the status line briefly shows what Claude is doing (read from the tmux pane
@@ -116,11 +119,54 @@ styles**, role/accessible name, bounding box, text, and outer HTML.
 Per send: recent **console errors / uncaught exceptions / failed fetches** (buffered
 from page load by the widget), and optionally a **screenshot** — either the largest
 selected element, or the **whole viewport with the selection outlined** — saved to a
-temp file and referenced by path so Claude can read the image.
+temp file and referenced by path so Claude can read the image. The screenshot toggle
+lives in the panel itself (checkbox + element/viewport), so it's one click per send.
+
+## Dictation (local, no cloud)
+
+The composer takes typing or voice: click the mic inside the textarea, talk, then click
+it again (or press **Esc**) to transcribe — the text appends to whatever is already
+typed. Esc while recording stops and transcribes; it does not discard the draft.
+
+The browser records, **the bridge transcribes with [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+on your machine**. No audio leaves the box. This is deliberate: the Web Speech API is
+Google's hosted recognizer, Chromium-only in practice, and Brave disables it outright.
+
+```bash
+brew install whisper-cpp
+# a multilingual model, anywhere the bridge looks (see below)
+curl -L -o ~/.local/share/whisper-cpp/ggml-small.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+```
+
+Model lookup is automatic: `~/.local/share/whisper-cpp`, `~/.cache/whisper-cpp`,
+`~/Library/Application Support/whisper-cpp`, and the Homebrew/`/usr/local` share dirs.
+It prefers `small` (a dictation-length clip transcribes in ~2s on Apple Silicon), then
+`medium`, `large`, `base`, `tiny`; English-only `.en` models are skipped. Override
+either half in `~/.config/claude-tmux-bridge/config.json`:
+
+```json
+{ "whisperBin": "/opt/homebrew/bin/whisper-cli", "whisperModel": "/path/ggml-medium.bin" }
+```
+
+**If your app sends security headers**, check the one that vetoes the mic outright:
+
+```
+Permissions-Policy: camera=(), microphone=(), geolocation=()   # mic dead, padlock can't override
+Permissions-Policy: camera=(), microphone=(self), geolocation=()   # what dev needs
+```
+
+`microphone=()` is an empty allowlist — not even the page itself may record, so
+`getUserMedia` throws `NotAllowedError` no matter what the site permission says. The
+widget detects this and hides the mic with that explanation. Your CSP also needs
+`connect-src` to reach the bridge (`http://localhost:7331`) to post the audio.
+
+If whisper isn't installed the mic hides itself and Settings says why. Language is
+"browser default" unless you pick one in Settings (it maps to whisper's `-l`, and
+`auto` lets whisper detect it). Recording stops on its own at 2 minutes.
 
 Settings (remembered per origin): **target session**, **auto-send** (off = paste for
-review first), **screenshot mode** (off / element / viewport), and the **selection
-shortcut**.
+review first), **dictation language**, and the **selection shortcut**.
 
 ## Commands
 

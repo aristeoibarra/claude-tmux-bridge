@@ -33,7 +33,7 @@ Imports use explicit `.ts` extensions (`allowImportingTsExtensions` + Bundler re
 
 ## Request flow (the core path)
 
-1. Browser widget (`client/widget.ts`) captures one or more elements via `client/capture.ts` (component name/ancestry **and serialized props** from the fiber), optionally rasterizes a screenshot with `modern-screenshot` (largest element, or the viewport with the selection outlined), and `POST`s `{message, url, elements, screenshot, autoSubmit, targetPane, diagnostics}` to `/send`. `diagnostics` is a ring buffer of recent console errors / uncaught exceptions / failed fetches kept by `client/diagnostics.ts` (hooks installed at widget load; the extension injects at `document_start` so they run before app code).
+1. Browser widget (`client/widget.ts`) captures one or more elements via `client/capture.ts` (component name/ancestry **and serialized props** from the fiber), optionally rasterizes a screenshot with `modern-screenshot` (largest element, or the viewport with the selection outlined — toggled per send from the panel, persisted in `prefs.shot`/`prefs.shotTarget`), and `POST`s `{message, url, elements, screenshot, autoSubmit, targetPane, diagnostics}` to `/send`. `diagnostics` is a ring buffer of recent console errors / uncaught exceptions / failed fetches kept by `client/diagnostics.ts` (hooks installed at widget load; the extension injects at `document_start` so they run before app code).
 2. `src/server.ts` `resolveTarget()` picks the destination pane (cascade below), `formatPrompt()` (`src/format.ts`) renders the agent-facing prompt, and a base64 screenshot is written to a temp file so Claude can read it by path.
 3. `injectToPane()` (`src/tmux.ts`) loads the prompt into a named tmux buffer and `paste-buffer -p` (bracketed paste) into the pane, then optionally `send-keys Enter`. Bracketed paste is required so multi-line prompts stay one block instead of submitting per newline.
 4. After an auto-send the widget polls `GET /pane-title?pane=...` once: Claude Code mirrors its current task into the tmux pane title, which is the only "did Claude pick it up?" feedback channel.
@@ -62,11 +62,19 @@ The design goal is **zero per-project config**, tolerant of ephemeral tmux pane 
 
 Resolves the owning component name + ancestry by walking `__reactFiber$*`, mirroring React DevTools' name resolution (memo/forwardRef/lazy). `getComponentProps` snapshots the owner's `memoizedProps` as flat strings (scalars verbatim; functions/objects/elements summarized, never deep-serialized — keep it that way, props can hold huge object graphs). React 19 removed `_debugSource`, so file:line is **not** available from the fiber — component identity is what lets the agent grep to the file. `FRAMEWORK_RE` is a **pattern** (not an exact list) that filters Next.js/App-Router internal wrappers, because Next renames them across versions; extend the pattern rather than hardcoding names. Exact `file:line` is only available if a project opts into a `data-source` Babel plugin (read in `capture.ts`).
 
+## Dictation (client/dictation.ts + src/transcribe.ts)
+
+Record in the browser, transcribe on the bridge with whisper.cpp. **Don't "simplify" this back to the Web Speech API**: it's Google's hosted recognizer, Chromium-only in practice, and Brave disables it — it fails `not-allowed` with no permission prompt, which is exactly what this replaced.
+
+- **Client**: `getUserMedia` → `AudioContext({ sampleRate: 16000 })` → `ScriptProcessorNode` accumulating Float32 chunks → 16-bit mono WAV (what whisper wants) → base64 → `POST /transcribe`. The processor is connected through a **muted gain node** because a ScriptProcessor only runs while connected to the graph, and going straight to `destination` would echo the mic. `generation` is bumped on `cancel()` so a late transcription can't land in a composer the user already closed. `encodeWav` is exported only so the WAV header can be round-tripped through whisper from a script.
+- **Server**: `resolveSetup` finds the binary (`whisper-cli`, then `whisper-cpp`) and the best model, and caches the pair. Model ranking prefers `small` for latency and skips `.en` models (they'd mistranscribe Spanish). Both halves are overridable via `whisperBin`/`whisperModel` in the config.
+- `GET /dictation` reports availability so the widget can hide the mic (and show why in Settings) instead of failing on click. `/transcribe` gets its own 40 MB body cap — audio dwarfs the 5 MB JSON limit.
+
 ## Widget delivery & config
 
 - Three ways to load the widget, all hitting the same `/widget.js`: the **browser extension** (`extension/`, MV3 content script, auto-injects on `localhost`/`127.0.0.1`, skips port 7331), the **bookmarklet** (`src/bookmarklet.ts`, served at `/`), or mounting `examples/ClaudeBridge.tsx` from a project (CSP-strict fallback).
 - The widget derives the bridge origin from its own `<script src>`, so it works on any port with no build-time define.
-- Config lives at `~/.config/claude-tmux-bridge/config.json` (`src/config.ts`); default port `7331`.
+- Config lives at `~/.config/claude-tmux-bridge/config.json` (`src/config.ts`); default port `7331`. Optional `whisperBin`/`whisperModel` override dictation's auto-detection.
 - The server is intentionally permissive (CORS `*`, accepts any local origin) — it's localhost-only dev tooling. Don't add auth/origin checks expecting production hardening; that's out of scope by design.
 
 ## Releasing
