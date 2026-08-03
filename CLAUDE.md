@@ -77,6 +77,7 @@ Record in the browser, transcribe on the bridge with whisper.cpp. **Don't "simpl
 - Config lives at `~/.config/claude-tmux-bridge/config.json` (`src/config.ts`); default port `7331`. Optional `whisperBin`/`whisperModel` override dictation's auto-detection. This is machine config — user settings are a separate thing, see below.
 - The server is intentionally permissive (CORS `*`, accepts any local origin) — it's localhost-only dev tooling. Don't add auth/origin checks expecting production hardening; that's out of scope by design.
 - `extension/` is hand-written JS, not a build target: `content.js`/`popup.js` are loaded verbatim by MV3 and so are outside `tsconfig`/tsup. Keep them small and plain; anything that wants types belongs in `client/`.
+- **Icons**: `extension/icons/icon.svg` is the source; the four committed PNGs are rasterized from it (no build step wires this up — regenerate by hand with `npx @resvg/resvg-js` or any SVG rasterizer, ImageMagick's built-in MSVG renderer drops the gradient and every `stroke`). Its geometry is deliberately a multiple of 8 on a 128 grid so it lands on whole pixels at 16px, the size the toolbar actually renders — keep that if you edit it.
 
 ## User settings live in the extension popup
 
