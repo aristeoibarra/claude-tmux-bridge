@@ -357,12 +357,19 @@ function createServer(config) {
   }
   return createHttpServer((req, res) => {
     void handle(req, res).catch((error) => {
-      sendJson(res, 500, { ok: false, error: errorMessage(error) });
+      if (res.writableEnded) return;
+      const tooLarge = error instanceof PayloadTooLarge;
+      if (tooLarge) res.setHeader("connection", "close");
+      sendJson(res, tooLarge ? 413 : 500, { ok: false, error: errorMessage(error) });
+      if (tooLarge) res.on("finish", () => req.destroy());
     });
   });
   async function handle(req, res) {
     setCors(res);
     if (req.method === "OPTIONS") {
+      if (req.headers["access-control-request-private-network"] === "true") {
+        res.setHeader("access-control-allow-private-network", "true");
+      }
       res.writeHead(204);
       res.end();
       return;
@@ -556,15 +563,25 @@ function isTranscribePayload(value) {
   const payload = { ...value };
   return typeof payload.audio === "string" && (payload.language === void 0 || typeof payload.language === "string");
 }
+var PayloadTooLarge = class extends Error {
+  constructor(limit) {
+    super(`payload too large \u2014 over ${Math.round(limit / 1e6)} MB (usually an oversized screenshot)`);
+    this.name = "PayloadTooLarge";
+  }
+};
 function readBody(req, limit = MAX_BODY_BYTES) {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let overflowed = false;
     const chunks = [];
     req.on("data", (chunk) => {
+      if (overflowed) return;
       size += chunk.length;
       if (size > limit) {
-        reject(new Error("body too large"));
-        req.destroy();
+        overflowed = true;
+        chunks.length = 0;
+        req.pause();
+        reject(new PayloadTooLarge(limit));
         return;
       }
       chunks.push(chunk);
