@@ -39,13 +39,26 @@ export function createServer(config: BridgeConfig) {
 
   return createHttpServer((req, res) => {
     void handle(req, res).catch((error: unknown) => {
-      sendJson(res, 500, { ok: false, error: errorMessage(error) });
+      if (res.writableEnded) return;
+      const tooLarge = error instanceof PayloadTooLarge;
+      if (tooLarge) res.setHeader("connection", "close");
+      sendJson(res, tooLarge ? 413 : 500, { ok: false, error: errorMessage(error) });
+      // Only now is it safe to drop the half-read upload: the browser has the
+      // explanation. Destroying before this turns "screenshot too big" into a
+      // connection reset, which the widget can only report as "bridge offline".
+      if (tooLarge) res.on("finish", () => req.destroy());
     });
   });
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     setCors(res);
     if (req.method === "OPTIONS") {
+      // A page served on the machine's LAN IP reaching localhost crosses into a
+      // more-private network, which Chromium gates behind this preflight opt-in.
+      // Without it the widget can only report "bridge offline".
+      if (req.headers["access-control-request-private-network"] === "true") {
+        res.setHeader("access-control-allow-private-network", "true");
+      }
       res.writeHead(204);
       res.end();
       return;
@@ -288,15 +301,28 @@ function isTranscribePayload(value: unknown): value is { audio: string; language
   );
 }
 
+/** Thrown past the limit so the request handler can answer 413 instead of 500. */
+class PayloadTooLarge extends Error {
+  constructor(limit: number) {
+    super(`payload too large — over ${Math.round(limit / 1_000_000)} MB (usually an oversized screenshot)`);
+    this.name = "PayloadTooLarge";
+  }
+}
+
 function readBody(req: IncomingMessage, limit = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let overflowed = false;
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => {
+      if (overflowed) return;
       size += chunk.length;
       if (size > limit) {
-        reject(new Error("body too large"));
-        req.destroy();
+        overflowed = true;
+        chunks.length = 0;
+        // Stop buffering, but keep the socket alive so the 413 can be written.
+        req.pause();
+        reject(new PayloadTooLarge(limit));
         return;
       }
       chunks.push(chunk);
