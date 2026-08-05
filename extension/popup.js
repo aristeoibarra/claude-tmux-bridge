@@ -210,6 +210,10 @@
     renderHotkey();
   }
 
+  // Outside the chain below: the bridge's health doesn't depend on the tab, and
+  // it's the one line that should still be right when everything else fails.
+  void loadHealth();
+
   chrome.tabs
     .query({ active: true, currentWindow: true })
     .then(function (tabs) {
@@ -241,12 +245,17 @@
           paneField.classList.add("off");
         }
 
-        void loadHealth();
         void loadDictationStatus();
       });
     })
-    .catch(function () {
-      healthEl.textContent = "● no tab";
+    .catch(function (error) {
+      // Anything that throws up there leaves every control unrendered, so say
+      // what actually broke instead of blaming the tab — a missing "storage"
+      // permission looked exactly like a missing tab.
+      healthEl.textContent = "● settings unavailable";
       healthEl.className = "health err";
+      scopeEl.textContent = error && error.message ? error.message : String(error);
+      void loadSessions();
+      renderHotkey();
     });
 })();
