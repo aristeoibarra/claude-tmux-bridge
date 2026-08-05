@@ -30,6 +30,44 @@ interface Hotkey {
 const DEFAULT_HOTKEY: Hotkey = { code: "KeyC", alt: true, ctrl: false, shift: false, meta: false };
 
 /**
+ * Rasterizing waits on every image and font the element pulls in, and a picked
+ * container can be the whole page — `domToPng` has no timeout of its own, so
+ * without these the panel sits on "Sending…" forever with no way back.
+ */
+const SHOT_TIMEOUT_MS = 15_000;
+const SEND_TIMEOUT_MS = 20_000;
+/** Base64 chars, kept under the bridge's 5 MB body cap with room for the prompt. */
+const MAX_SHOT_CHARS = 4_000_000;
+
+class TimeoutError extends Error {
+  constructor() {
+    super("timed out");
+    this.name = "TimeoutError";
+  }
+}
+
+/**
+ * The underlying work keeps running (neither domToPng nor a stalled decode can
+ * be cancelled) — this only stops the UI from waiting on it.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new TimeoutError()), ms);
+    const done = (): void => window.clearTimeout(timer);
+    promise.then(
+      (value) => {
+        done();
+        resolve(value);
+      },
+      (error: unknown) => {
+        done();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
+
+/**
  * Everything the extension popup owns arrives over postMessage (see
  * `extension/content.js`); the panel's own toggles stay in localStorage, which
  * is also the fallback when the widget is loaded without the extension.
@@ -411,7 +449,10 @@ const ICON_STOP =
     dest.textContent = "resolving…";
     dest.className = "dest";
     try {
-      const r = await fetch(`${BRIDGE_ORIGIN}/resolve?url=${encodeURIComponent(location.href)}`);
+      const r = await withTimeout(
+        fetch(`${BRIDGE_ORIGIN}/resolve?url=${encodeURIComponent(location.href)}`),
+        SEND_TIMEOUT_MS,
+      );
       const d = (await r.json()) as { ok: boolean; project?: string };
       dest.textContent = d.ok ? `→ ${d.project}` : "→ no Claude pane for this project";
       dest.className = d.ok ? "dest ok" : "dest err";
@@ -741,27 +782,43 @@ const ICON_STOP =
     }
 
     sendBtn.disabled = true;
-    setStatus("Sending…", "");
 
     let screenshot: string | null = null;
-    let shotFailed = false;
+    let shotNote: string | null = null;
     const shotTargets = [...picked.map((p) => p.element), ...(focused ? [focused] : [])];
     if (prefs.shot) {
+      // Its own status line: rasterizing is the slow half, and calling it
+      // "Sending…" made a stalled capture look like a dead bridge.
+      setStatus("Rendering screenshot…", "");
       try {
-        screenshot =
+        screenshot = await withTimeout(
           prefs.shotTarget === "viewport"
-            ? await captureViewport(shotTargets)
-            : await captureElement(shotTargets);
-      } catch {
+            ? captureViewport(shotTargets)
+            : captureElement(shotTargets),
+          SHOT_TIMEOUT_MS,
+        );
+        if (screenshot === null) shotNote = "screenshot failed";
+        else if (screenshot.length > MAX_SHOT_CHARS) {
+          // Better to land the prompt without the image than to have the bridge
+          // reject the whole send for being oversized.
+          screenshot = null;
+          shotNote = "screenshot too large, dropped";
+        }
+      } catch (error) {
         screenshot = null;
+        shotNote = error instanceof TimeoutError ? "screenshot timed out" : "screenshot failed";
       }
-      shotFailed = screenshot === null;
     }
 
+    setStatus("Sending…", "");
+
     const pinned = prefs.targetPane;
+    const abort = new AbortController();
+    const timer = window.setTimeout(() => abort.abort(), SEND_TIMEOUT_MS);
     try {
       const res = await fetch(`${BRIDGE_ORIGIN}/send`, {
         method: "POST",
+        signal: abort.signal,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           message,
@@ -791,7 +848,7 @@ const ICON_STOP =
       pickedBox.hidden = true;
 
       const notes: string[] = [];
-      if (shotFailed) notes.push("screenshot failed");
+      if (shotNote) notes.push(shotNote);
       if (pinned && data.targetPane && data.targetPane !== pinned) {
         // Pane ids never come back once gone — drop the dead pin instead of
         // silently re-routing on every send.
@@ -811,8 +868,14 @@ const ICON_STOP =
       setStatus(`Sent to ${project}${suffix}.`, "ok");
       watchPaneTitle(data.targetPane);
     } catch {
-      setStatus(`Bridge not reachable at ${BRIDGE_ORIGIN}.`, "err");
+      setStatus(
+        abort.signal.aborted
+          ? `No answer from the bridge after ${SEND_TIMEOUT_MS / 1000}s — try again.`
+          : `Bridge not reachable at ${BRIDGE_ORIGIN}.`,
+        "err",
+      );
     } finally {
+      window.clearTimeout(timer);
       sendBtn.disabled = false;
     }
   }
