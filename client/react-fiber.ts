@@ -98,15 +98,19 @@ function getDisplayNameForFiber(fiber: Fiber): string | null {
  */
 const FRAMEWORK_RE = new RegExp(
   [
-    "(?:Boundary|Handler|Outlet|Router)$", // common framework/HOC suffixes
+    // Common framework/HOC suffixes. Next 16 rewrote several of these wrappers
+    // and parked the rewrite under a "New" suffix (InnerScrollHandlerNew), so
+    // the suffix has to survive one more word.
+    "(?:Boundary|Handler|Outlet|Router)(?:New|Old)?$",
     "Scroll(?:AndMaybe|And)?Focus", // scroll/focus handlers
     "RenderFromTemplate",
     "HTTPAccessFallback",
     "Fallback",
     "Redirect",
     "NotFound",
+    "^__.*__$", // dunder-wrapped internals (__next_root_layout_boundary__)
     // exact internal names without the suffixes above
-    "^(?:Suspense|Fragment|ViewTransition|SegmentViewNode|TemplateContext|MetadataOutlet|RouteAnnouncer|ClientPageRoot|ClientSegmentRoot|AppRouter|LayoutRouter|InnerLayoutRouter|OuterLayoutRouter)$",
+    "^(?:Suspense|Fragment|ViewTransition|SegmentViewNode|TemplateContext|MetadataOutlet|RouteAnnouncer|ClientPageRoot|ClientSegmentRoot|AppRouter|LayoutRouter|InnerLayoutRouter|OuterLayoutRouter|Root|ServerRoot|AppRoot|DevRoot|HotReload|SegmentStateProvider|ReactDevOverlay|AppDevOverlay|DevOverlay|Postpone)$",
   ].join("|"),
 );
 
